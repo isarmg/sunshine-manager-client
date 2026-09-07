@@ -92,6 +92,20 @@ def main():
             with tarfile.open(archive, "x:gz") as out:
                 out.add(stage, arcname=name)
         (args.output / (archive.name + ".sha256")).write_text(f"{digest(archive)}  {archive.name}\n", encoding="utf-8")
+    if windows:
+        # MSI's ProductVersion is numeric; the source version remains in its manifest.
+        subprocess.run(["powershell.exe", "-NoProfile", "-File", str(ROOT / "scripts/build-windows-installer.ps1"),
+                        "-ClientExe", str(binary), "-Output", str(args.output), "-Version", version.split("-")[0]],
+                       check=True, env={key: value for key, value in os.environ.items() if key.lower() != "psmodulepath"})
+    else:
+        subprocess.run(["python3", str(ROOT / "scripts/build-linux-installer.py"), "--binary", str(binary),
+                        "--output", str(args.output), "--version", version], check=True)
+    for installer in sorted(args.output.glob("*.msi")) + sorted(args.output.glob("*.deb")):
+        installer.with_name(installer.name + ".sha256").write_text(f"{digest(installer)}  {installer.name}\n")
+        installer.with_name(installer.name + ".manifest.json").write_text(json.dumps({
+            "product": "sunshine-client", "version": version, "source_commit": sha,
+            "authenticode_signed": False, "sha256": digest(installer), "target": target,
+        }, indent=2) + "\n")
     if run("git", "rev-parse", "HEAD") != sha or run("git", "status", "--porcelain", "--untracked-files=all"):
         raise RuntimeError("source changed while packaging; do not publish output")
     print(f"Built {archive.name} at {sha}; installation and real Sunshine acceptance are separate gates.")

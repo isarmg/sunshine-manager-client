@@ -102,7 +102,7 @@ def verify(archive, destination, sha):
     return root, binary
 
 
-def install_test(root, binary, temporary):
+def install_test(root, binary, temporary, installer=None):
     # This test intentionally creates a real service/account, but never on a user's host.
     if os.environ.get("GITHUB_ACTIONS") != "true" or os.environ.get("RUNNER_ENVIRONMENT") != "github-hosted":
         raise ValueError("--install is restricted to disposable GitHub-hosted runners")
@@ -136,19 +136,36 @@ foreach($path in @('{escaped}', '{escaped}\\bootstrap.json')) {{
 }}
 """)
         install = ["powershell.exe", "-NoProfile", "-NonInteractive", "-ExecutionPolicy", "Bypass", "-File", str(root / "install-windows.ps1"), "-Binary", str(binary), "-Bootstrap", str(bootstrap)]
-        subprocess.run(install, check=True, env=powershell_environment())
+        if installer:
+            subprocess.run(['msiexec.exe', '/i', str(installer), '/qn', '/norestart'], check=True)
+            installed = Path(os.environ['ProgramFiles']) / 'SunshineClient'
+            subprocess.run([str(installed / 'sunshine-client-tray.exe'), '--self-test'], check=True, timeout=30)
+            subprocess.run([str(installed / 'sunshine-client-tray.exe'), '--configure-file', str(bootstrap)], check=True, timeout=60)
+        else:
+            subprocess.run(install, check=True, env=powershell_environment())
         if subprocess.run(install, stdout=subprocess.DEVNULL, stderr=subprocess.DEVNULL, env=powershell_environment()).returncode == 0:
             raise ValueError("installer overwrote an existing installation")
         powershell("Restart-Service SunshineClient; (Get-Service SunshineClient).WaitForStatus('Running',[TimeSpan]::FromSeconds(30))")
         time.sleep(3)
         if powershell("(Get-Service SunshineClient).Status") != "Running":
             raise ValueError("Client failed to remain running while Manager was offline")
-        subprocess.run(["powershell.exe", "-NoProfile", "-NonInteractive", "-ExecutionPolicy", "Bypass", "-File", str(root / "uninstall-windows.ps1")], check=True, env=powershell_environment())
+        if installer:
+            subprocess.run(['msiexec.exe', '/x', str(installer), '/qn', '/norestart'], check=True)
+            if (installed / 'sunshine-client-tray.exe').exists():
+                raise ValueError('MSI uninstall retained tray executable')
+        else:
+            subprocess.run(["powershell.exe", "-NoProfile", "-NonInteractive", "-ExecutionPolicy", "Bypass", "-File", str(root / "uninstall-windows.ps1")], check=True, env=powershell_environment())
         if not (Path(os.environ["ProgramData"]) / "SunshineClient/provisioning/state.sqlite3").is_file():
             raise ValueError("uninstall removed protected state")
     else:
         install = ["bash", str(root / "install-linux.sh"), str(binary), str(bootstrap)]
-        subprocess.run(install, check=True)
+        if installer:
+            subprocess.run(['dpkg', '--install', str(installer)], check=True)
+            # Exercise the same interactive setup entry point users run, with fixture input.
+            answers = '\n'.join(['wss://127.0.0.1:9/sunshine-client/v1/connect', '11111111-1111-4111-8111-111111111111', '22222222-2222-4222-8222-222222222222', 'https://127.0.0.1:47990/', 'test', 'a' * 64, 'installation-fixture-only', str(ca), str(ca)]) + '\n'
+            subprocess.run(['sunshine-client-setup'], input=answers, text=True, check=True)
+        else:
+            subprocess.run(install, check=True)
         if subprocess.run(install, stdout=subprocess.DEVNULL, stderr=subprocess.DEVNULL).returncode == 0:
             raise ValueError("installer overwrote an existing installation")
         subprocess.run(["systemctl", "restart", "sunshine-client.service"], check=True)
@@ -157,7 +174,10 @@ foreach($path in @('{escaped}', '{escaped}\\bootstrap.json')) {{
         state = Path("/var/lib/sunshine-client/provisioning")
         if (state.stat().st_mode & 0o077) != 0 or not (state / "identity.json").is_file():
             raise ValueError("protected persistent identity missing")
-        subprocess.run(["bash", str(root / "uninstall-linux.sh")], check=True)
+        if installer:
+            subprocess.run(['dpkg', '--remove', 'sunshine-client'], check=True)
+        else:
+            subprocess.run(["bash", str(root / "uninstall-linux.sh")], check=True)
         if not (state / "identity.json").is_file():
             raise ValueError("uninstall removed protected state")
     print("Native install, autostart configuration, restart, overwrite refusal and state-preserving uninstall passed; no real Sunshine was modified.")
@@ -168,6 +188,7 @@ def main():
     parser.add_argument("--archive", type=Path, required=True)
     parser.add_argument("--sha", required=True)
     parser.add_argument("--install", action="store_true")
+    parser.add_argument("--installer", type=Path, help="MSI/DEB to exercise instead of script installation")
     args = parser.parse_args()
     if not re.fullmatch(r"[0-9a-f]{40}", args.sha):
         parser.error("full source SHA required")
@@ -176,7 +197,12 @@ def main():
         root, binary = verify(args.archive.resolve(), temporary, args.sha)
         print("Independent archive, manifest, checksums and executable identity verified.")
         if args.install:
-            install_test(root, binary, temporary)
+            if args.installer:
+                expected = args.installer.with_name(args.installer.name + '.manifest.json')
+                manifest = json.loads(expected.read_text())
+                if manifest['source_commit'] != args.sha or manifest['sha256'] != digest(args.installer):
+                    raise ValueError('installer source or checksum mismatch')
+            install_test(root, binary, temporary, args.installer.resolve() if args.installer else None)
 
 
 if __name__ == "__main__":

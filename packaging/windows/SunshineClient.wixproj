@@ -1,0 +1,16 @@
+<Project Sdk="WixToolset.Sdk/4.0.6">
+  <PropertyGroup>
+    <OutputType>Package</OutputType>
+    <InstallerPlatform>x64</InstallerPlatform>
+    <Platform>x64</Platform>
+    <Cultures>en-US</Cultures>
+    <SuppressSpecificWarnings>1075</SuppressSpecificWarnings>
+    <SuppressIces>ICE74</SuppressIces>
+    <DefineConstants>ClientExe=$(ClientExe);TrayExe=$(TrayExe);ProductVersion=$(ProductVersion);LicenseRtf=$(MSBuildThisFileDirectory)License.rtf</DefineConstants>
+    <OutputName>sunshine-client-$(ProductVersion)-windows-x64</OutputName>
+  </PropertyGroup>
+  <ItemGroup>
+    <PackageReference Include="WixToolset.UI.wixext" Version="4.0.6" />
+    <PackageReference Include="WixToolset.Util.wixext" Version="4.0.6" />
+  </ItemGroup>
+</Project>

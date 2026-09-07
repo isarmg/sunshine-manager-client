@@ -31,7 +31,7 @@ jobs:
           cargo clippy --locked -p sunshine-client --all-targets -- -D warnings
           cargo test --locked -p sunshine-client
           cargo test --locked -p sunshine-client --test local_https -- --ignored
-          python3 -m unittest discover -s scripts/tests -p 'test_client_package.py'
+          python3 -m unittest discover -s scripts/tests -p 'test_*.py'
       - name: Build only the Linux Client
         run: |
           tag_args=()
@@ -41,7 +41,9 @@ jobs:
         run: |
           mapfile -t archives < <(find "$RUNNER_TEMP/client-output" -maxdepth 1 -type f -name '*.tar.gz')
           test "${#archives[@]}" = 1
-          sudo env GITHUB_ACTIONS=true RUNNER_ENVIRONMENT="$RUNNER_ENVIRONMENT" python3 scripts/check-client-package.py --archive "${archives[0]}" --sha "$GITHUB_SHA" --install
+          mapfile -t installers < <(find "$RUNNER_TEMP/client-output" -maxdepth 1 -type f -name '*.deb')
+          test "${#installers[@]}" = 1
+          sudo env GITHUB_ACTIONS=true RUNNER_ENVIRONMENT="$RUNNER_ENVIRONMENT" python3 scripts/check-client-package.py --archive "${archives[0]}" --sha "$GITHUB_SHA" --install --installer "${installers[0]}"
       - name: Retain verified Linux Client release inputs
         uses: actions/upload-artifact@043fb46d1a93c77aae656e7c1c64a875d1fc6a0a # v7.0.1
         with:
@@ -77,7 +79,7 @@ jobs:
           if ($LASTEXITCODE) { exit $LASTEXITCODE }
           cargo test --locked -p sunshine-client --test local_https -- --ignored
           if ($LASTEXITCODE) { exit $LASTEXITCODE }
-          python -m unittest discover -s scripts/tests -p 'test_client_package.py'
+          python -m unittest discover -s scripts/tests -p 'test_*.py'
           exit $LASTEXITCODE
       - name: Build only the Windows Client
         shell: pwsh
@@ -92,7 +94,9 @@ jobs:
           $env:PATH = 'C:\Program Files\Git\usr\bin;' + $env:PATH
           $archives = @(Get-ChildItem -LiteralPath "$env:RUNNER_TEMP\client-output" -Filter '*.zip' -File)
           if ($archives.Count -ne 1) { throw 'Expected one Windows archive' }
-          python scripts/check-client-package.py --archive $archives[0].FullName --sha "$env:GITHUB_SHA" --install
+          $installers = @(Get-ChildItem -LiteralPath "$env:RUNNER_TEMP\client-output" -Filter '*.msi' -File)
+          if ($installers.Count -ne 1) { throw 'Expected one Windows MSI' }
+          python scripts/check-client-package.py --archive $archives[0].FullName --sha "$env:GITHUB_SHA" --install --installer $installers[0].FullName
           exit $LASTEXITCODE
       - name: Retain verified Windows Client release inputs
         uses: actions/upload-artifact@043fb46d1a93c77aae656e7c1c64a875d1fc6a0a # v7.0.1

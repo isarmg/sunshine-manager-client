@@ -9,6 +9,27 @@
 
 ## 下载与身份
 
+### 引导安装（新）
+
+Windows 构建现在生成 **MSI 安装包**，Linux 构建生成 **DEB 安装包**，原归档保留用于校验和无人值守部署。
+安装包旁的 `.manifest.json` 记录完整源码提交与校验和。MSI 使用数字版本，候选版本身份以 manifest 和客户端 `--version` 为准。
+
+- Windows：双击 MSI → 按向导安装 → 从开始菜单打开 **Sunshine Client** → 右键托盘选择“配对设置”。
+  输入 Manager 页面提供的标识和配对码，选择已核验的两端 CA 证书，并在本机填写 Sunshine 账号密码，点击“保存并启动客户端”。
+  配对设置需要 UAC 管理员授权；托盘本身不需要管理员权限。托盘下次登录自动出现，退出托盘不停止后台服务。
+  托盘显示的是 Windows 服务状态，真实连接、Sunshine 可达性及配置生效情况仍在 Manager 分别核验。
+  在 Windows“已安装的应用”中卸载 Sunshine Client；保留设备身份和去重记录，不删除 Sunshine。
+- Ubuntu 24.04 x86_64：`sudo apt install ./sunshine-client_0.1.0~rc1_amd64.deb`，然后运行 `sudo sunshine-client-setup`，按提示完成配对。
+  密码与配对码不回显；完成后自动启用 systemd 服务。卸载使用 `sudo apt remove sunshine-client`，保留状态和服务账户。
+
+Windows 依赖系统 .NET Framework 4.8（安装器/托盘原生验收基线 Windows Server 2025）；尚未做其他桌面系统的安装实测。
+安装包没有 Authenticode 签名，不能承诺没有 SmartScreen 提示。安装不会关闭 TLS 校验、修改 Sunshine 或开放入站端口。
+目前配对仍需管理员提供可信证书及 Manager/设备标识，不能仅凭配对码跳过服务器身份验证。
+首次安装不支持覆盖已有服务或转换旧状态。默认不授权 Sunshine 重启。
+
+构建由 `scripts/package-client.py` 统一完成：Windows 使用系统 C# 编译器及固定 WiX 4.0.6，Linux 使用 `dpkg-deb`。
+CI 在一次性 GitHub 托管主机上验证 MSI/DEB 的真实安装、初始化、服务重启、拒绝覆盖和卸载保留状态；这些测试禁止在用户主机上运行。
+
 本仓库 Client 标签使用 `v0.1.0-rc.1` 形式，和 Server 仓库分别发行；以下为打包约定，不代表该标签或 Release 已发布。
 发行项为 Windows ZIP、Linux tar.gz 及各自 SHA-256 文件；归档含二进制、安装/卸载脚本、
 无秘密的 bootstrap 示例、许可证、manifest 和逐文件 SHA256SUMS。

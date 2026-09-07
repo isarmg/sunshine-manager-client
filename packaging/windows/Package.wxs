@@ -1,0 +1,34 @@
+<Wix xmlns="http://wixtoolset.org/schemas/v4/wxs" xmlns:ui="http://wixtoolset.org/schemas/v4/wxs/ui">
+  <Package Name="Sunshine Client" Manufacturer="sarmg" Version="$(var.ProductVersion)" Scope="perMachine" InstallerVersion="500">
+    <MediaTemplate EmbedCab="yes" />
+    <Launch Condition="VersionNT64" Message="Sunshine Client requires 64-bit Windows." />
+    <Property Id="EXISTINGCLIENTSERVICE"><RegistrySearch Id="ExistingService" Root="HKLM" Key="SYSTEM\CurrentControlSet\Services\SunshineClient" Name="ImagePath" Type="raw" Bitness="always64" /></Property>
+    <Launch Condition="Installed OR NOT EXISTINGCLIENTSERVICE" Message="A Sunshine Client service already exists. This installer will not overwrite it." />
+    <Property Id="ARPNOMODIFY" Value="1" />
+    <Property Id="ARPURLINFOABOUT" Value="https://github.com/isarmg/sunshine-manager-client" />
+    <Property Id="WixUnelevatedShellExecTarget" Value="[#TrayExe]" />
+    <CustomAction Id="LaunchTray" BinaryRef="Wix4UtilCA_X64" DllEntry="WixUnelevatedShellExec" Execute="immediate" Impersonate="yes" Return="ignore" />
+    <UI><Publish Dialog="ExitDialog" Control="Finish" Event="DoAction" Value="LaunchTray" Order="1" Condition="NOT Installed" /></UI>
+    <ui:WixUI Id="WixUI_Minimal" />
+    <WixVariable Id="WixUILicenseRtf" Value="$(var.LicenseRtf)" />
+    <StandardDirectory Id="ProgramFiles64Folder">
+      <Directory Id="INSTALLFOLDER" Name="SunshineClient">
+        <Component Id="ClientService" Guid="4C3D6380-EB5B-45B8-B9F7-77B28CD14E82" Bitness="always64">
+          <File Id="ClientExe" Source="$(var.ClientExe)" KeyPath="yes" />
+          <ServiceInstall Id="ServiceInstall" Name="SunshineClient" DisplayName="Sunshine Client" Description="Sunshine management only; configure pairing from the Start menu." Type="ownProcess" Start="auto" ErrorControl="normal" Arguments="service --state &quot;[CommonAppDataFolder]SunshineClient&quot;" />
+          <!-- Do not start until the administrator has completed local pairing setup. -->
+          <ServiceControl Id="ServiceControl" Name="SunshineClient" Stop="both" Remove="uninstall" Wait="yes" />
+        </Component>
+        <Component Id="Tray" Guid="48DA580E-FB54-4B84-9C60-7D1F125AA385" Bitness="always64">
+          <File Id="TrayExe" Source="$(var.TrayExe)" KeyPath="yes">
+            <Shortcut Id="TrayShortcut" Directory="ProgramMenuFolder" Name="Sunshine Client" Advertise="yes" />
+          </File>
+          <RegistryValue Root="HKLM" Key="Software\Microsoft\Windows\CurrentVersion\Run" Name="SunshineClientTray" Value="&quot;[#TrayExe]&quot;" Type="string" />
+        </Component>
+      </Directory>
+    </StandardDirectory>
+    <StandardDirectory Id="CommonAppDataFolder" />
+    <StandardDirectory Id="ProgramMenuFolder" />
+    <Feature Id="Complete" Title="Sunshine Client" Level="1"><ComponentRef Id="ClientService" /><ComponentRef Id="Tray" /></Feature>
+  </Package>
+</Wix>
