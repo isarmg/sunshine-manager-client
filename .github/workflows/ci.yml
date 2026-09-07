@@ -1,0 +1,102 @@
+name: Client packages
+
+on:
+  push:
+    branches: [main]
+    tags: ['v*']
+  pull_request:
+  workflow_dispatch:
+
+permissions: {}
+
+jobs:
+  client-linux-package:
+    permissions:
+      contents: read
+    runs-on: ubuntu-24.04
+    timeout-minutes: 30
+    steps:
+      - name: Check out exact source without credentials
+        uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7
+        with:
+          fetch-depth: 0
+          persist-credentials: false
+      - name: Enforce workflow policy
+        run: python3 scripts/check-workflow-supply-chain.py
+      - name: Install exact Rust
+        run: rustup toolchain install 1.98.0 --profile minimal --component clippy,rustfmt
+      - name: Test Client and secure local transport
+        run: |
+          cargo fmt --all -- --check
+          cargo clippy --locked -p sunshine-client --all-targets -- -D warnings
+          cargo test --locked -p sunshine-client
+          cargo test --locked -p sunshine-client --test local_https -- --ignored
+          python3 -m unittest discover -s scripts/tests -p 'test_client_package.py'
+      - name: Build only the Linux Client
+        run: |
+          tag_args=()
+          if [[ "$GITHUB_REF_TYPE" == tag ]]; then tag_args+=(--require-tag); fi
+          python3 scripts/package-client.py --output "$RUNNER_TEMP/client-output" "${tag_args[@]}"
+      - name: Verify extracted package and actual systemd install lifecycle
+        run: |
+          mapfile -t archives < <(find "$RUNNER_TEMP/client-output" -maxdepth 1 -type f -name '*.tar.gz')
+          test "${#archives[@]}" = 1
+          sudo env GITHUB_ACTIONS=true RUNNER_ENVIRONMENT="$RUNNER_ENVIRONMENT" python3 scripts/check-client-package.py --archive "${archives[0]}" --sha "$GITHUB_SHA" --install
+      - name: Retain verified Linux Client release inputs
+        uses: actions/upload-artifact@043fb46d1a93c77aae656e7c1c64a875d1fc6a0a # v7.0.1
+        with:
+          name: sunshine-client-linux
+          path: ${{ runner.temp }}/client-output/*
+          if-no-files-found: error
+  client-windows-package:
+    permissions:
+      contents: read
+    runs-on: windows-2025
+    timeout-minutes: 30
+    env:
+      VSLANG: 1033
+    steps:
+      - name: Check out exact source without credentials
+        uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7
+        with:
+          fetch-depth: 0
+          persist-credentials: false
+      - name: Enforce workflow policy
+        run: python scripts/check-workflow-supply-chain.py
+      - name: Check native PowerShell module environment before building
+        run: python -m unittest discover -s scripts/tests -p 'test_client_package.py'
+      - name: Install exact Rust
+        run: rustup toolchain install 1.98.0 --profile minimal --component clippy,rustfmt
+      - name: Test Client and secure local transport
+        shell: pwsh
+        run: |
+          $env:PATH = 'C:\Program Files\Git\usr\bin;' + $env:PATH
+          cargo clippy --locked -p sunshine-client --all-targets -- -D warnings
+          if ($LASTEXITCODE) { exit $LASTEXITCODE }
+          cargo test --locked -p sunshine-client
+          if ($LASTEXITCODE) { exit $LASTEXITCODE }
+          cargo test --locked -p sunshine-client --test local_https -- --ignored
+          if ($LASTEXITCODE) { exit $LASTEXITCODE }
+          python -m unittest discover -s scripts/tests -p 'test_client_package.py'
+          exit $LASTEXITCODE
+      - name: Build only the Windows Client
+        shell: pwsh
+        run: |
+          $tagArgs = @()
+          if ($env:GITHUB_REF_TYPE -eq 'tag') { $tagArgs += '--require-tag' }
+          python scripts/package-client.py --output "$env:RUNNER_TEMP\client-output" @tagArgs
+          exit $LASTEXITCODE
+      - name: Verify extracted package and actual Windows Service install lifecycle
+        shell: pwsh
+        run: |
+          $env:PATH = 'C:\Program Files\Git\usr\bin;' + $env:PATH
+          $archives = @(Get-ChildItem -LiteralPath "$env:RUNNER_TEMP\client-output" -Filter '*.zip' -File)
+          if ($archives.Count -ne 1) { throw 'Expected one Windows archive' }
+          python scripts/check-client-package.py --archive $archives[0].FullName --sha "$env:GITHUB_SHA" --install
+          exit $LASTEXITCODE
+      - name: Retain verified Windows Client release inputs
+        uses: actions/upload-artifact@043fb46d1a93c77aae656e7c1c64a875d1fc6a0a # v7.0.1
+        with:
+          name: sunshine-client-windows
+          path: ${{ runner.temp }}/client-output/*
+          if-no-files-found: error
