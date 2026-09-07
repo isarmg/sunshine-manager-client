@@ -97,6 +97,9 @@ def main():
         subprocess.run(["powershell.exe", "-NoProfile", "-File", str(ROOT / "scripts/build-windows-installer.ps1"),
                         "-ClientExe", str(binary), "-Output", str(args.output), "-Version", version.split("-")[0]],
                        check=True, env={key: value for key, value in os.environ.items() if key.lower() != "psmodulepath"})
+        numeric_version = version.split("-")[0]
+        (args.output / f"sunshine-client-{numeric_version}-windows-x64.msi").rename(
+            args.output / f"sunshine-client-{version}-windows-x64.msi")
     else:
         subprocess.run(["python3", str(ROOT / "scripts/build-linux-installer.py"), "--binary", str(binary),
                         "--output", str(args.output), "--version", version], check=True)

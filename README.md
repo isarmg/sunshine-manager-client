@@ -1,4 +1,4 @@
-# Sunshine Client 0.1.0-rc.1
+# Sunshine Client 0.1.0-rc.2
 
 独立运行在 Sunshine 主机上的管理客户端，支持 Windows x86_64 MSVC 和 Linux x86_64 GNU。
 主动连接 Manager WSS，不代理 Sunshine–Moonlight 视频、不编码、不执行任意脚本，
@@ -19,7 +19,7 @@ Windows 构建现在生成 **MSI 安装包**，Linux 构建生成 **DEB 安装�
   配对设置需要 UAC 管理员授权；托盘本身不需要管理员权限。托盘下次登录自动出现，退出托盘不停止后台服务。
   托盘显示的是 Windows 服务状态，真实连接、Sunshine 可达性及配置生效情况仍在 Manager 分别核验。
   在 Windows“已安装的应用”中卸载 Sunshine Client；保留设备身份和去重记录，不删除 Sunshine。
-- Ubuntu 24.04 x86_64：`sudo apt install ./sunshine-client_0.1.0~rc1_amd64.deb`，然后运行 `sudo sunshine-client-setup`，按提示完成配对。
+- Ubuntu 24.04 x86_64：`sudo apt install ./sunshine-client_0.1.0~rc2_amd64.deb`，然后运行 `sudo sunshine-client-setup`，按提示完成配对。
   密码与配对码不回显；完成后自动启用 systemd 服务。卸载使用 `sudo apt remove sunshine-client`，保留状态和服务账户。
 
 Windows 依赖系统 .NET Framework 4.8（安装器/托盘原生验收基线 Windows Server 2025）；尚未做其他桌面系统的安装实测。
@@ -30,8 +30,8 @@ Windows 依赖系统 .NET Framework 4.8（安装器/托盘原生验收基线 Win
 构建由 `scripts/package-client.py` 统一完成：Windows 使用系统 C# 编译器及固定 WiX 4.0.6，Linux 使用 `dpkg-deb`。
 CI 在一次性 GitHub 托管主机上验证 MSI/DEB 的真实安装、初始化、服务重启、拒绝覆盖和卸载保留状态；这些测试禁止在用户主机上运行。
 
-本仓库 Client 标签使用 `v0.1.0-rc.1` 形式，和 Server 仓库分别发行；以下为打包约定，不代表该标签或 Release 已发布。
-发行项为 Windows ZIP、Linux tar.gz 及各自 SHA-256 文件；归档含二进制、安装/卸载脚本、
+本仓库 Client 标签使用 `v0.1.0-rc.2` 形式，和 Server 仓库分别发行。下载请查看 [GitHub Releases](https://github.com/isarmg/sunshine-manager-client/releases)。
+发行项为 Windows MSI、Linux DEB、Windows ZIP、Linux tar.gz 及各自 SHA-256 文件；归档含二进制、安装/卸载脚本、
 无秘密的 bootstrap 示例、许可证、manifest 和逐文件 SHA256SUMS。
 二进制 `--version` 与 manifest 绑定完整源码提交。Windows 使用静态 MSVC CRT，**没有 Authenticode 签名**。
 校验和检查字节完整性，不代替独立发布者身份验证；要求 AllSigned 的环境须先完成受信任签名。
@@ -56,9 +56,9 @@ Administrators 和 SYSTEM，拒绝重解析点或不受保护输入。注册成�
 先核验官方附件校验和并解包：
 
 ```sh
-sha256sum --check sunshine-client-0.1.0-rc.1-x86_64-unknown-linux-gnu.tar.gz.sha256
-tar -xzf sunshine-client-0.1.0-rc.1-x86_64-unknown-linux-gnu.tar.gz
-cd sunshine-client-0.1.0-rc.1-x86_64-unknown-linux-gnu
+sha256sum --check sunshine-client-0.1.0-rc.2-x86_64-unknown-linux-gnu.tar.gz.sha256
+tar -xzf sunshine-client-0.1.0-rc.2-x86_64-unknown-linux-gnu.tar.gz
+cd sunshine-client-0.1.0-rc.2-x86_64-unknown-linux-gnu
 sudo bash install-linux.sh "$PWD/sunshine-client" /absolute/private/bootstrap.json
 systemctl status sunshine-client.service
 ```
