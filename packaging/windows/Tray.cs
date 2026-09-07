@@ -89,6 +89,7 @@ internal static class TrayApp {
         readonly Dictionary<string, TextBox> fields = new Dictionary<string, TextBox>();
         readonly Label result = new Label { AutoSize = true, ForeColor = Color.Firebrick, MaximumSize = new Size(610, 0) };
         readonly Button submit = new Button { AutoSize = true };
+        readonly CheckBox restart = new CheckBox { AutoSize = true, MaximumSize = new Size(620, 0) };
         public Setup() {
             Text = T("Sunshine Client · 配对设置", "Sunshine Client · Pairing setup"); Width = 720; Height = 760;
             AutoScaleMode = AutoScaleMode.Dpi; StartPosition = FormStartPosition.CenterScreen;
@@ -106,6 +107,8 @@ internal static class TrayApp {
             Certificate(panel, "sunshine_ca_pem", T("Sunshine CA 证书", "Sunshine CA certificate"));
             Add(panel, "sunshine_username", T("Sunshine 用户名", "Sunshine username"), "", false);
             Add(panel, "sunshine_password", T("Sunshine 密码", "Sunshine password"), "", true);
+            restart.Text = T("允许 Manager 经管理员确认后重启 Sunshine（可能中断串流）", "Allow Manager-confirmed Sunshine restart (may interrupt streaming)");
+            panel.Controls.Add(restart); panel.SetColumnSpan(restart, 2);
             panel.Controls.Add(result); panel.SetColumnSpan(result, 2);
             submit.Text = T("保存并启动客户端", "Save and start client"); submit.Click += delegate { Save(); };
             panel.Controls.Add(submit); panel.SetColumnSpan(submit, 2);
@@ -139,7 +142,7 @@ internal static class TrayApp {
                     }
                     config.Add(field.Key, value);
                 }
-                config.Add("restart_allowed", false);
+                config.Add("restart_allowed", restart.Checked);
                 var security = new DirectorySecurity();
                 security.SetAccessRuleProtection(true, false);
                 foreach (var sid in new[] { WellKnownSidType.BuiltinAdministratorsSid, WellKnownSidType.LocalSystemSid })

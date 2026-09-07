@@ -141,6 +141,19 @@ foreach($path in @('{escaped}', '{escaped}\\bootstrap.json')) {{
             installed = Path(os.environ['ProgramFiles']) / 'SunshineClient'
             subprocess.run([str(installed / 'sunshine-client-tray.exe'), '--self-test'], check=True, timeout=30)
             subprocess.run([str(installed / 'sunshine-client-tray.exe'), '--configure-file', str(bootstrap)], check=True, timeout=60)
+            if subprocess.run([str(installed / 'sunshine-client-tray.exe'), '--configure-file', str(bootstrap)], timeout=60).returncode == 0:
+                raise ValueError('pairing wizard overwrote existing identity')
+            tray = subprocess.Popen([str(installed / 'sunshine-client-tray.exe')])
+            try:
+                time.sleep(2)
+                if tray.poll() is not None:
+                    raise ValueError('tray exited unexpectedly')
+            finally:
+                if tray.poll() is None:
+                    tray.terminate()
+                tray.wait(timeout=15)
+            if powershell("(Get-Service SunshineClient).Status") != 'Running':
+                raise ValueError('tray exit stopped management service')
         else:
             subprocess.run(install, check=True, env=powershell_environment())
         if subprocess.run(install, stdout=subprocess.DEVNULL, stderr=subprocess.DEVNULL, env=powershell_environment()).returncode == 0:

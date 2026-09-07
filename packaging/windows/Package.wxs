@@ -4,7 +4,6 @@
     <Launch Condition="VersionNT64" Message="Sunshine Client requires 64-bit Windows." />
     <Property Id="EXISTINGCLIENTSERVICE"><RegistrySearch Id="ExistingService" Root="HKLM" Key="SYSTEM\CurrentControlSet\Services\SunshineClient" Name="ImagePath" Type="raw" Bitness="always64" /></Property>
     <Launch Condition="Installed OR NOT EXISTINGCLIENTSERVICE" Message="A Sunshine Client service already exists. This installer will not overwrite it." />
-    <Property Id="ARPNOMODIFY" Value="1" />
     <Property Id="ARPURLINFOABOUT" Value="https://github.com/isarmg/sunshine-manager-client" />
     <Property Id="WixUnelevatedShellExecTarget" Value="[#TrayExe]" />
     <CustomAction Id="LaunchTray" BinaryRef="Wix4UtilCA_X64" DllEntry="WixUnelevatedShellExec" Execute="immediate" Impersonate="yes" Return="ignore" />
@@ -14,13 +13,13 @@
     <StandardDirectory Id="ProgramFiles64Folder">
       <Directory Id="INSTALLFOLDER" Name="SunshineClient">
         <Component Id="ClientService" Guid="4C3D6380-EB5B-45B8-B9F7-77B28CD14E82" Bitness="always64">
-          <File Id="ClientExe" Source="$(var.ClientExe)" KeyPath="yes" />
+          <File Id="ClientExe" Source="$(var.ClientExe)" Name="sunshine-client.exe" KeyPath="yes" />
           <ServiceInstall Id="ServiceInstall" Name="SunshineClient" DisplayName="Sunshine Client" Description="Sunshine management only; configure pairing from the Start menu." Type="ownProcess" Start="auto" ErrorControl="normal" Arguments="service --state &quot;[CommonAppDataFolder]SunshineClient&quot;" />
           <!-- Do not start until the administrator has completed local pairing setup. -->
           <ServiceControl Id="ServiceControl" Name="SunshineClient" Stop="both" Remove="uninstall" Wait="yes" />
         </Component>
         <Component Id="Tray" Guid="48DA580E-FB54-4B84-9C60-7D1F125AA385" Bitness="always64">
-          <File Id="TrayExe" Source="$(var.TrayExe)" KeyPath="yes">
+          <File Id="TrayExe" Source="$(var.TrayExe)" Name="sunshine-client-tray.exe" KeyPath="yes">
             <Shortcut Id="TrayShortcut" Directory="ProgramMenuFolder" Name="Sunshine Client" Advertise="yes" />
           </File>
           <RegistryValue Root="HKLM" Key="Software\Microsoft\Windows\CurrentVersion\Run" Name="SunshineClientTray" Value="&quot;[#TrayExe]&quot;" Type="string" />
