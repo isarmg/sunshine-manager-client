@@ -133,7 +133,12 @@ def matching_job_property(segment: list[Line], pattern: re.Pattern[str]) -> list
 
 def validate_job(source: str, header: Line, segment: list[Line]) -> None:
     runners = matching_job_property(segment, RUNNER_KEY)
-    expected_runner = (CLIENT_WINDOWS_RUNNER if (source, header.content) == (".github/workflows/ci.yml", "client-windows-package:") else FIXED_RUNNER)
+    native_client_runners = {
+        "client-windows-package:": CLIENT_WINDOWS_RUNNER,
+        "client-macos-arm64:": "macos-15",
+        "client-macos-x64:": "macos-15-intel",
+    }
+    expected_runner = native_client_runners.get(header.content, FIXED_RUNNER) if source == ".github/workflows/ci.yml" else FIXED_RUNNER
     if len(runners) != 1 or runners[0].content != f"runs-on: {expected_runner}":
         raise fail(
             source,
@@ -341,6 +346,15 @@ jobs:
     validate_workflow("positive-fixture.yml", base)
     windows_client = base.replace("  test:", "  client-windows-package:").replace(FIXED_RUNNER, CLIENT_WINDOWS_RUNNER)
     validate_workflow(".github/workflows/ci.yml", windows_client)
+    for job, runner in (("client-macos-arm64:", "macos-15"), ("client-macos-x64:", "macos-15-intel")):
+        fixture = base.replace("  test:", "  " + job).replace(FIXED_RUNNER, runner)
+        validate_workflow(".github/workflows/ci.yml", fixture)
+        for invalid in (fixture.replace(runner, "macos-latest"), fixture.replace(job, "server:")):
+            try:
+                validate_workflow(".github/workflows/ci.yml", invalid)
+            except PolicyError:
+                continue
+            raise PolicyError("negative self-test accepted a floating macOS runner or macOS Server job")
     cases = {
         "floating action": base.replace(
             PINNED_OFFICIAL_ACTIONS["actions/checkout"], "v4"

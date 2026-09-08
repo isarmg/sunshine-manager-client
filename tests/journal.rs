@@ -1,4 +1,4 @@
-#![cfg(target_os = "linux")]
+#![cfg(any(target_os = "linux", target_os = "macos"))]
 use std::os::unix::fs::{PermissionsExt, symlink};
 use sunshine_client::{
     engine::{EffectIntent, ExecutionRecord, Journal},
@@ -16,7 +16,7 @@ fn record() -> ExecutionRecord {
 
 #[test]
 fn facts_survive_reopen_and_hold_an_exclusive_process_lock() {
-    let temporary = tempfile::tempdir().unwrap();
+    let temporary = tempfile::tempdir_in(std::env::temp_dir().canonicalize().unwrap()).unwrap();
     let path = temporary.path().join("journal");
     let mut journal = FileJournal::open(&path).unwrap();
     assert!(FileJournal::open(&path).is_err());
@@ -45,7 +45,7 @@ fn facts_survive_reopen_and_hold_an_exclusive_process_lock() {
 
 #[test]
 fn corrupt_record_and_symlink_fail_closed() {
-    let temporary = tempfile::tempdir().unwrap();
+    let temporary = tempfile::tempdir_in(std::env::temp_dir().canonicalize().unwrap()).unwrap();
     let path = temporary.path().join("journal");
     let mut journal = FileJournal::open(&path).unwrap();
     journal.create(ID, &record()).unwrap();
@@ -59,7 +59,7 @@ fn corrupt_record_and_symlink_fail_closed() {
 
 #[test]
 fn permissive_directory_and_path_traversal_are_rejected() {
-    let temporary = tempfile::tempdir().unwrap();
+    let temporary = tempfile::tempdir_in(std::env::temp_dir().canonicalize().unwrap()).unwrap();
     let path = temporary.path().join("journal");
     let mut journal = FileJournal::open(&path).unwrap();
     assert!(journal.create("../escape", &record()).is_err());

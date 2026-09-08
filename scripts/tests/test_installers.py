@@ -17,7 +17,8 @@ class InstallerTests(unittest.TestCase):
         self.assertEqual(service.get('Start'), 'demand')
         self.assertIn('service --state', service.get('Arguments'))
         self.assertIsNone(tree.find('.//w:ServiceControl', ns).get('Start'))
-        self.assertTrue(tree.findall('.//w:RegistryValue', ns))
+        self.assertFalse(tree.findall('.//w:RegistryValue', ns))
+        self.assertNotIn('TrayExe', (ROOT / 'packaging/windows/Package.wxs').read_text())
 
     def test_deb_build_and_private_setup_contract(self):
         import shutil
@@ -35,7 +36,8 @@ class InstallerTests(unittest.TestCase):
             subprocess.run(['dpkg-deb', '-x', str(deb), str(directory / 'extracted')], check=True)
             setup = directory / 'extracted/usr/bin/sunshine-client-setup'
             self.assertEqual(setup.stat().st_mode & 0o777, 0o755)
-            self.assertIn("getpass.getpass", setup.read_text())
+            self.assertIn("os.execv", setup.read_text())
+            self.assertNotIn("enrollment_token", setup.read_text())
             subprocess.run(['dpkg-deb', '-e', str(deb), str(directory / 'control')], check=True)
             for script in ('preinst', 'postinst', 'prerm', 'postrm'):
                 subprocess.run(['sh', '-n', str(directory / 'control' / script)], check=True)

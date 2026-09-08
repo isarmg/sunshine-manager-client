@@ -2,7 +2,7 @@ name: Client packages
 
 on:
   push:
-    branches: [main]
+    branches: [main, 'codex/client-cli-*']
     tags: ['v*']
   pull_request:
   workflow_dispatch:
@@ -30,6 +30,7 @@ jobs:
           cargo fmt --all -- --check
           cargo clippy --locked -p sunshine-client --all-targets -- -D warnings
           cargo test --locked -p sunshine-client
+          cargo build --locked --example native_acceptance_seed
           cargo test --locked -p sunshine-client --test local_https -- --ignored
           python3 -m unittest discover -s scripts/tests -p 'test_*.py'
       - name: Build only the Linux Client
@@ -43,7 +44,7 @@ jobs:
           test "${#archives[@]}" = 1
           mapfile -t installers < <(find "$RUNNER_TEMP/client-output" -maxdepth 1 -type f -name '*.deb')
           test "${#installers[@]}" = 1
-          sudo env GITHUB_ACTIONS=true RUNNER_ENVIRONMENT="$RUNNER_ENVIRONMENT" python3 scripts/check-client-package.py --archive "${archives[0]}" --sha "$GITHUB_SHA" --install --installer "${installers[0]}"
+          sudo env GITHUB_ACTIONS=true RUNNER_ENVIRONMENT="$RUNNER_ENVIRONMENT" python3 scripts/check-client-package.py --archive "${archives[0]}" --sha "$GITHUB_SHA" --install --installer "${installers[0]}" --seed "$PWD/target/debug/examples/native_acceptance_seed"
       - name: Retain verified Linux Client release inputs
         uses: actions/upload-artifact@043fb46d1a93c77aae656e7c1c64a875d1fc6a0a # v7.0.1
         with:
@@ -77,6 +78,8 @@ jobs:
           if ($LASTEXITCODE) { exit $LASTEXITCODE }
           cargo test --locked -p sunshine-client
           if ($LASTEXITCODE) { exit $LASTEXITCODE }
+          cargo build --locked --example native_acceptance_seed
+          if ($LASTEXITCODE) { exit $LASTEXITCODE }
           cargo test --locked -p sunshine-client --test local_https -- --ignored
           if ($LASTEXITCODE) { exit $LASTEXITCODE }
           python -m unittest discover -s scripts/tests -p 'test_*.py'
@@ -96,11 +99,97 @@ jobs:
           if ($archives.Count -ne 1) { throw 'Expected one Windows archive' }
           $installers = @(Get-ChildItem -LiteralPath "$env:RUNNER_TEMP\client-output" -Filter '*.msi' -File)
           if ($installers.Count -ne 1) { throw 'Expected one Windows MSI' }
-          python scripts/check-client-package.py --archive $archives[0].FullName --sha "$env:GITHUB_SHA" --install --installer $installers[0].FullName
+          python scripts/check-client-package.py --archive $archives[0].FullName --sha "$env:GITHUB_SHA" --install --installer $installers[0].FullName --seed "$PWD\target\debug\examples\native_acceptance_seed.exe"
           exit $LASTEXITCODE
       - name: Retain verified Windows Client release inputs
         uses: actions/upload-artifact@043fb46d1a93c77aae656e7c1c64a875d1fc6a0a # v7.0.1
         with:
           name: sunshine-client-windows
+          path: ${{ runner.temp }}/client-output/*
+          if-no-files-found: error
+
+  client-macos-arm64:
+    permissions:
+      contents: read
+    runs-on: macos-15
+    timeout-minutes: 30
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7
+        with:
+          persist-credentials: false
+      - name: Install exact Rust
+        run: rustup toolchain install 1.98.0 --profile minimal --component clippy,rustfmt
+      - name: Native protected storage, journal recovery and CLI tests
+        run: |
+          cargo test --locked
+          cargo clippy --locked --all-targets -- -D warnings
+          plutil -lint deploy/macos/org.sarmg.sunshine-client.plist
+          sh -n deploy/macos/install-macos.sh
+          sh -n deploy/macos/uninstall-macos.sh
+      - name: Build native CLI and disposable acceptance fixture
+        run: |
+          cargo build --locked --release
+          cargo build --locked --example native_acceptance_seed
+      - name: Exercise actual launchd, service account, readonly IPC and state-preserving uninstall
+        run: |
+          bash scripts/prepare-native-macos-fixture.sh "$PWD/target/release/sunshine-client"
+          sudo sh deploy/macos/install-macos.sh "$PWD/target/release/sunshine-client"
+          sudo env GITHUB_ACTIONS=true RUNNER_ENVIRONMENT="$RUNNER_ENVIRONMENT" python3 scripts/native-service-acceptance.py --binary /usr/local/libexec/sunshine-client --seed "$PWD/target/debug/examples/native_acceptance_seed" --state "/Library/Application Support/sunshine-client" --service-user _sunshineclient:_sunshineclient
+          sudo sh deploy/macos/uninstall-macos.sh
+          sudo test -f "/Library/Application Support/sunshine-client/provisioning/identity.json"
+          sudo test -d "/Library/Application Support/sunshine-client/journal"
+      - name: Package and independently verify the native Mac archive
+        run: |
+          python3 scripts/package-client.py --output "$RUNNER_TEMP/client-output"
+          archives=("$RUNNER_TEMP"/client-output/*.tar.gz)
+          test "${#archives[@]}" = 1
+          python3 scripts/check-client-package.py --archive "${archives[0]}" --sha "$GITHUB_SHA"
+      - name: Retain verified native Mac archive
+        uses: actions/upload-artifact@043fb46d1a93c77aae656e7c1c64a875d1fc6a0a # v7.0.1
+        with:
+          name: sunshine-client-macos-arm64
+          path: ${{ runner.temp }}/client-output/*
+          if-no-files-found: error
+
+  client-macos-x64:
+    permissions:
+      contents: read
+    runs-on: macos-15-intel
+    timeout-minutes: 30
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7
+        with:
+          persist-credentials: false
+      - name: Install exact Rust
+        run: rustup toolchain install 1.98.0 --profile minimal --component clippy,rustfmt
+      - name: Native protected storage, journal recovery and CLI tests
+        run: |
+          cargo test --locked
+          cargo clippy --locked --all-targets -- -D warnings
+          plutil -lint deploy/macos/org.sarmg.sunshine-client.plist
+          sh -n deploy/macos/install-macos.sh
+          sh -n deploy/macos/uninstall-macos.sh
+      - name: Build native CLI and disposable acceptance fixture
+        run: |
+          cargo build --locked --release
+          cargo build --locked --example native_acceptance_seed
+      - name: Exercise actual launchd, service account, readonly IPC and state-preserving uninstall
+        run: |
+          bash scripts/prepare-native-macos-fixture.sh "$PWD/target/release/sunshine-client"
+          sudo sh deploy/macos/install-macos.sh "$PWD/target/release/sunshine-client"
+          sudo env GITHUB_ACTIONS=true RUNNER_ENVIRONMENT="$RUNNER_ENVIRONMENT" python3 scripts/native-service-acceptance.py --binary /usr/local/libexec/sunshine-client --seed "$PWD/target/debug/examples/native_acceptance_seed" --state "/Library/Application Support/sunshine-client" --service-user _sunshineclient:_sunshineclient
+          sudo sh deploy/macos/uninstall-macos.sh
+          sudo test -f "/Library/Application Support/sunshine-client/provisioning/identity.json"
+          sudo test -d "/Library/Application Support/sunshine-client/journal"
+      - name: Package and independently verify the native Mac archive
+        run: |
+          python3 scripts/package-client.py --output "$RUNNER_TEMP/client-output"
+          archives=("$RUNNER_TEMP"/client-output/*.tar.gz)
+          test "${#archives[@]}" = 1
+          python3 scripts/check-client-package.py --archive "${archives[0]}" --sha "$GITHUB_SHA"
+      - name: Retain verified native Mac archive
+        uses: actions/upload-artifact@043fb46d1a93c77aae656e7c1c64a875d1fc6a0a # v7.0.1
+        with:
+          name: sunshine-client-macos-x64
           path: ${{ runner.temp }}/client-output/*
           if-no-files-found: error

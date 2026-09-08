@@ -2,7 +2,7 @@ use sunshine_client::storage::{ProtectedState, prepare_root};
 #[test]
 fn protected_state_persists_and_excludes_other_processes() {
     let temporary = tempfile::tempdir().unwrap();
-    let root = temporary.path().join("client");
+    let root = physical_parent(&temporary).join("client");
     let _root = prepare_root(&root).unwrap();
     let path = root.join("state");
     let store = ProtectedState::open(&path).unwrap();
@@ -23,7 +23,7 @@ fn windows_journal_facts_survive_reopen_and_cannot_erase_intent() {
         journal::FileJournal,
     };
     let temporary = tempfile::tempdir().unwrap();
-    let path = temporary.path().join("journal");
+    let path = physical_parent(&temporary).join("journal");
     let mut journal = FileJournal::open(&path).unwrap();
     assert!(FileJournal::open(&path).is_err());
     let id = "op_00000000-0000-4000-8000-000000000001";
@@ -46,15 +46,15 @@ fn windows_journal_facts_survive_reopen_and_cannot_erase_intent() {
 #[test]
 fn windows_rejects_world_readable_acl_and_hardlinked_database() {
     let temporary = tempfile::tempdir().unwrap();
-    let root = temporary.path().join("state");
+    let root = physical_parent(&temporary).join("state");
     drop(ProtectedState::open(&root).unwrap());
     std::fs::hard_link(
         root.join("state.sqlite3"),
-        temporary.path().join("alias.db"),
+        physical_parent(&temporary).join("alias.db"),
     )
     .unwrap();
     assert!(ProtectedState::open(&root).is_err());
-    let other = temporary.path().join("public");
+    let other = physical_parent(&temporary).join("public");
     drop(ProtectedState::open(&other).unwrap());
     let result = std::process::Command::new("icacls.exe")
         .arg(&other)
@@ -63,4 +63,15 @@ fn windows_rejects_world_readable_acl_and_hardlinked_database() {
         .unwrap();
     assert!(result.status.success());
     assert!(ProtectedState::open(&other).is_err());
+}
+
+fn physical_parent(temporary: &tempfile::TempDir) -> std::path::PathBuf {
+    #[cfg(unix)]
+    {
+        temporary.path().canonicalize().unwrap()
+    }
+    #[cfg(windows)]
+    {
+        temporary.path().to_owned()
+    }
 }

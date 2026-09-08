@@ -157,3 +157,46 @@ fn encode(record: &ExecutionRecord) -> Result<Vec<u8>, JournalError> {
 fn storage(_: impl std::fmt::Debug) -> JournalError {
     JournalError::Storage
 }
+
+/// Read local execution facts without opening the writer or acquiring a lock.
+pub fn inspect(path: &Path, operation: Option<&str>) -> Result<serde_json::Value, JournalError> {
+    let directory = PrivateDirectory::open_for_administration(path).map_err(storage)?;
+    if let Some(id) = operation {
+        let bytes = directory
+            .read_private_bounded(&record_name(id)?, MAX_RECORD_BYTES)
+            .map_err(storage)?;
+        let record: ExecutionRecord = serde_json::from_slice(&bytes).map_err(storage)?;
+        validate_record(&record)?;
+        return Ok(
+            serde_json::json!({"scope":"local_execution_observation","operation_id":id,"record":record}),
+        );
+    }
+    let mut records = Vec::new();
+    for file in directory
+        .files(InventoryLimits {
+            max_entries: MAX_RECORDS + 64,
+            max_total_bytes: (MAX_RECORDS * MAX_RECORD_BYTES) as u64,
+        })
+        .map_err(storage)?
+    {
+        let key = file
+            .name
+            .as_os_str()
+            .to_str()
+            .ok_or(JournalError::Storage)?;
+        if key == LOCK_NAME || AtomicFile::is_temporary_name(&file.name) {
+            continue;
+        }
+        let id = key.strip_suffix(".json").ok_or(JournalError::Storage)?;
+        record_name(id)?;
+        let bytes = directory
+            .read_private_bounded(&file.name, MAX_RECORD_BYTES)
+            .map_err(storage)?;
+        let record: ExecutionRecord = serde_json::from_slice(&bytes).map_err(storage)?;
+        validate_record(&record)?;
+        records.push(
+            serde_json::json!({"operation_id":id,"effect":record.effect,"report":record.report}),
+        );
+    }
+    Ok(serde_json::json!({"scope":"local_execution_observation","records":records}))
+}

@@ -164,6 +164,7 @@ impl ManagerConnection {
         if capabilities.protocol != PROTOCOL {
             return Err(TransportError::Configuration);
         }
+        let mut mutation_completed = None;
         let mut backoff = RetryBackoff::new(Duration::from_secs(1), Duration::from_secs(60), 20)
             .map_err(|_| TransportError::Configuration)?;
         loop {
@@ -174,8 +175,9 @@ impl ManagerConnection {
             let result = tokio::select! {
                 biased;
                 _ = shutdown.changed() => return Ok(()),
-                result = self.session(&binding, &capabilities, executor.clone(), &health) => result,
+                result = self.session(&binding, &capabilities, executor.clone(), &health, &mut mutation_completed) => result,
             };
+            crate::runtime_status::observe("manager_session", serde_json::json!("disconnected"));
             if matches!(
                 result,
                 Err(TransportError::Revoked
@@ -203,6 +205,7 @@ impl ManagerConnection {
         capabilities: &Capabilities,
         executor: Arc<Executor<A, J>>,
         health: &watch::Receiver<HealthObservation>,
+        mutation_completed: &mut Option<Instant>,
     ) -> Result<(), TransportError> {
         let mut socket = self.connect().await?;
         send(
@@ -218,6 +221,7 @@ impl ManagerConnection {
         let mut last_peer = Instant::now();
         let mut executing: FuturesUnordered<ExecutionFuture> = FuturesUnordered::new();
         let mut in_flight: Option<(String, String)> = None;
+        crate::runtime_status::observe("manager_session", serde_json::json!("connected"));
         loop {
             tokio::select! {
                 // Credential revocation/connection close wins over publishing another result.
@@ -225,6 +229,7 @@ impl ManagerConnection {
                 incoming = socket.next() => {
                     let frame = incoming.ok_or(TransportError::Disconnected)?.map_err(|_| TransportError::Disconnected)?;
                     last_peer = Instant::now();
+                    crate::runtime_status::observe("last_peer_at",serde_json::json!(std::time::SystemTime::now().duration_since(std::time::UNIX_EPOCH).unwrap_or_default().as_secs()));
                     match frame {
                         Message::Text(text) => match decode_manager_message(text.as_bytes()).map_err(|_| TransportError::Protocol)? {
                             ManagerMessage::Revoked {} => return Err(TransportError::Revoked),
@@ -246,12 +251,14 @@ impl ManagerConnection {
                         },
                         Message::Ping(bytes) => send_frame(&mut socket, Message::Pong(bytes)).await?,
                         Message::Pong(_) => {},
+                        Message::Close(Some(frame)) if matches!(frame.code, tungstenite::protocol::frame::coding::CloseCode::Protocol | tungstenite::protocol::frame::coding::CloseCode::Unsupported | tungstenite::protocol::frame::coding::CloseCode::Policy) => return Err(TransportError::Protocol),
                         Message::Close(_) => return Err(TransportError::Disconnected),
                         _ => return Err(TransportError::Protocol),
                     }
                 },
                 Some((operation_id, report)) = executing.next(), if !executing.is_empty() => {
                     in_flight = None;
+                    *mutation_completed = Some(Instant::now());
                     send(&mut socket, ClientMessage::Result { operation_id, report }).await?;
                 },
                 _ = tick.tick() => {
@@ -260,7 +267,7 @@ impl ManagerConnection {
                     let fresh = observation.observed_at.is_some_and(|at| at.elapsed() < Duration::from_secs(30));
                     send(&mut socket, ClientMessage::Heartbeat {
                         sunshine_reachable: fresh.then_some(observation.sunshine_reachable),
-                        configuration: if fresh { observation.configuration } else { None },
+                        configuration: if fresh && observation.observed_at.is_some_and(|at|mutation_completed.is_none_or(|done|at>=done)) { observation.configuration } else { None },
                     }).await?;
                     send_frame(&mut socket, Message::Ping(Vec::new().into())).await?;
                 },

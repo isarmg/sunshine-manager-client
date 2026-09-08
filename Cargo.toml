@@ -1,6 +1,6 @@
 [package]
 name = "sunshine-client"
-version = "0.1.0-rc.3"
+version = "0.1.0-rc.4"
 edition = "2024"
 rust-version = "1.98"
 license = "Apache-2.0"
@@ -18,7 +18,7 @@ sarmg-client-runtime = { git = "https://github.com/isarmg/sarmg-foundation-clien
 serde = { version = "1", features = ["derive"] }
 serde_json = "1"
 sha2 = "0.10"
-sunshine-client-protocol = { git = "https://github.com/isarmg/sunshine-manager-server.git", rev = "d9103beec4d11d97f63fcfc866b709fad9057007", version = "=0.1.0" }
+sunshine-client-protocol = { git = "https://github.com/isarmg/sunshine-manager-server.git", rev = "d4b98b06a00d185bd845a4bd3e3df8c939807864", version = "=0.1.0" }
 thiserror = "2"
 tokio = { version = "1", features = ["macros", "rt-multi-thread", "sync", "time", "signal"] }
 tokio-tungstenite = { version = "0.28", default-features = false, features = ["connect", "rustls-tls-webpki-roots", "native-tls"] }
@@ -26,13 +26,14 @@ native-tls = "0.2"
 tokio-rustls = "0.26"
 zeroize = { version = "1", features = ["serde"] }
 
-[target.'cfg(target_os = "linux")'.dependencies]
+[target.'cfg(unix)'.dependencies]
+libc = "0.2"
 sarmg-client-fs-safety = { git = "https://github.com/isarmg/sarmg-foundation-client.git", rev = "b47b550a39336b4a592ea9acf26e98b4d8a660b1", version = "=0.7.0" }
 
 [target.'cfg(target_os = "windows")'.dependencies]
 rusqlite = { version = "0.32", features = ["bundled"] }
 windows-service = "=0.8.1"
-windows-sys = { version = "0.61", features = ["Win32_Foundation", "Win32_Security", "Win32_Security_Authorization", "Win32_Storage_FileSystem", "Win32_System_Threading"] }
+windows-sys = { version = "0.61", features = ["Win32_Foundation", "Win32_Security", "Win32_Security_Authorization", "Win32_Storage_FileSystem", "Win32_System_Pipes", "Win32_System_IO", "Win32_System_Threading"] }
 
 [dev-dependencies]
 uuid = { version = "1", features = ["v4"] }

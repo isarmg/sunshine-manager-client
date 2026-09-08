@@ -52,12 +52,15 @@ def main():
         tag = f"v{version}"
         if run("git", "cat-file", "-t", tag) != "tag" or run("git", "rev-parse", tag + "^{commit}") != sha:
             parser.error("annotated Client tag must resolve to this exact source")
-    if platform.machine().lower() not in ("x86_64", "amd64"):
-        parser.error("native x86_64 host required")
+    machine = platform.machine().lower()
     windows = platform.system() == "Windows"
-    if not windows and (platform.system() != "Linux" or platform.libc_ver()[0] != "glibc"):
-        parser.error("native Windows MSVC or Linux GNU host required")
-    target = "x86_64-pc-windows-msvc" if windows else "x86_64-unknown-linux-gnu"
+    macos = platform.system() == "Darwin"
+    if macos and machine in ("arm64", "aarch64", "x86_64"):
+        target = ("x86_64" if machine == "x86_64" else "aarch64") + "-apple-darwin"
+    elif machine in ("x86_64", "amd64") and (windows or (platform.system() == "Linux" and platform.libc_ver()[0] == "glibc")):
+        target = "x86_64-pc-windows-msvc" if windows else "x86_64-unknown-linux-gnu"
+    else:
+        parser.error("unsupported native OS/architecture")
     executable = "sunshine-client.exe" if windows else "sunshine-client"
     env = dict(os.environ, SUNSHINE_CLIENT_BUILD_SHA=sha, CARGO_INCREMENTAL="0")
     if windows:
@@ -75,10 +78,10 @@ def main():
         shutil.copy2(binary, stage / executable)
         for source, destination in COMMON_FILES.items():
             shutil.copy2(ROOT / source, stage / destination)
-        for item in (["install-windows.ps1", "uninstall-windows.ps1"] if windows else ["install-linux.sh", "uninstall-linux.sh", "sunshine-client.service"]):
-            shutil.copy2(ROOT / "deploy" / item, stage / item)
+        for item in (["install-windows.ps1", "uninstall-windows.ps1"] if windows else ["macos/install-macos.sh", "macos/uninstall-macos.sh", "macos/org.sarmg.sunshine-client.plist"] if macos else ["install-linux.sh", "uninstall-linux.sh", "sunshine-client.service"]):
+            shutil.copy2(ROOT / "deploy" / item, stage / Path(item).name)
         manifest = {"product": "sunshine-client", "version": version, "source_commit": sha, "target": target,
-                    "protocol": "sunshine-management/1", "authenticode_signed": False,
+                    "protocol": "sunshine-management/1", "authenticode_signed": False, "native_acceptance": "required", "notarized": False,
                     "files": {p.name: digest(p) for p in package_files(stage)}}
         (stage / "manifest.json").write_text(json.dumps(manifest, indent=2) + "\n", encoding="utf-8")
         (stage / "SHA256SUMS").write_text("".join(f"{digest(p)}  {p.name}\n" for p in package_files(stage)), encoding="utf-8")
@@ -100,14 +103,14 @@ def main():
         numeric_version = version.split("-")[0]
         (args.output / f"sunshine-client-{numeric_version}-windows-x64.msi").rename(
             args.output / f"sunshine-client-{version}-windows-x64.msi")
-    else:
+    elif not macos:
         subprocess.run(["python3", str(ROOT / "scripts/build-linux-installer.py"), "--binary", str(binary),
                         "--output", str(args.output), "--version", version], check=True)
     for installer in sorted(args.output.glob("*.msi")) + sorted(args.output.glob("*.deb")):
         installer.with_name(installer.name + ".sha256").write_text(f"{digest(installer)}  {installer.name}\n")
         installer.with_name(installer.name + ".manifest.json").write_text(json.dumps({
             "product": "sunshine-client", "version": version, "source_commit": sha,
-            "authenticode_signed": False, "sha256": digest(installer), "target": target,
+            "authenticode_signed": False, "native_acceptance": "required", "notarized": False, "sha256": digest(installer), "target": target,
         }, indent=2) + "\n")
     if run("git", "rev-parse", "HEAD") != sha or run("git", "status", "--porcelain", "--untracked-files=all"):
         raise RuntimeError("source changed while packaging; do not publish output")
