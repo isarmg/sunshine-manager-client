@@ -1,4 +1,4 @@
-# 纯命令行改造（未发布）
+# 纯命令行改造（v0.1.0-rc.4 预发布）
 
 公开入口为产品 CLI，长期运行由 SCM、systemd 或 launchd 管理。删除托盘、网页控制服务和登录自启入口；服务端集中管理网页保留。没有版本号或持久状态格式的暗中迁移。
 
@@ -25,9 +25,9 @@
 
 [四个平台的原生服务及安装包 CI 已通过](https://github.com/isarmg/sunshine-manager-client/actions/runs/34193661720)，源码提交 `6127a9d55c0125cca1bc0bc3c32344466a8b64ec`：Windows、Linux、macOS Intel 与 Apple Silicon。验收使用一次性 runner 的合成离线身份，覆盖安装后停止、显式启动与启动策略、真实只读 IPC、运行中维护冲突、管理员凭据更新、服务账户访问、停止后不错误重启，以及卸载保留身份和执行日志。
 
-Mac 归档已加入源提交、清单、校验和及实际可执行文件身份的独立验证。Windows 使用 MSVC/MSI，Linux 使用 Ubuntu 24.04 的 DEB；归档仍为未签名的验证产物。签名、公证、主分支与正式发行不在本次验证分支授权内。
+Mac 归档已加入源提交、清单、校验和及实际可执行文件身份的独立验证。Windows 使用 MSVC/MSI，Linux 使用 Ubuntu 24.04 的 DEB；本次 GitHub Release 标记为预发布，安装产物未签名，未公证。
 
-协议固定为 Server 的真实提交 `d4b98b06a00d185bd845a4bd3e3df8c939807864`，已删除临时 vendor；[Server 完整 CI](https://github.com/isarmg/sunshine-manager-server/actions/runs/34192112410) 已通过。生产环境仍须先部署匹配的 Server，再发布 macOS Client。
+协议固定为 Server 的真实提交 `d4b98b06a00d185bd845a4bd3e3df8c939807864`，已删除临时 vendor；[Server 完整 CI](https://github.com/isarmg/sunshine-manager-server/actions/runs/34192112410) 已通过。生产环境仍须先部署匹配的 Server，再连接 macOS Client。
 
 版本与升级/回退边界见 [兼容矩阵](cli-compatibility.md)。不存在自动历史迁移、跨平台状态复制或自动降级能力；不能通过删除日志或重新配对绕过安装器的覆盖拒绝。
 
