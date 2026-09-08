@@ -1,7 +1,7 @@
-# Sunshine Client 0.1.0-rc.2
+# Sunshine Client 0.1.0-rc.3
 
 独立运行在 Sunshine 主机上的管理客户端，支持 Windows 11 及以上 x86_64（最低 build 22000）和 Linux x86_64 GNU。
-本文描述主分支的新配对流程；已发布 rc.2 的行为以该版本 Release 说明为准，不修改历史发行包。
+本版本提供简化配对与退出托盘停止服务；历史版本的行为以各自 Release 说明为准，不修改历史发行包。
 主动连接 Manager WSS，不代理 Sunshine–Moonlight 视频、不编码、不执行任意脚本，
 不自动下载、安装、更新软件，也不开新的入站管理端口。
 
@@ -30,13 +30,13 @@ Windows 依赖系统 .NET Framework 4.8（安装器/托盘原生验收基线 Win
 两端只接受系统已信任的证书，不提供 TOFU、自签名确认或关闭 TLS 校验选项。
 Windows 服务使用 LocalSystem，企业 CA 应部署到本机计算机的受信任根存储，而不只是某个登录用户的个人存储。
 默认 Sunshine 自签名证书若未受系统信任，或 SAN 不包含填写的回环 IP，配对会失败；此流程不自动更改 Sunshine 证书。
-需要配合提供 `/sunshine-client/v1/pairing` 的新版 Server。系统信任不豁免证书名称、有效期校验。
+需要配合 [Server v0.10.0](https://github.com/isarmg/sunshine-manager-server/releases/tag/v0.10.0)，其提供 `/sunshine-client/v1/pairing`。系统信任不豁免证书名称、有效期校验。
 首次安装不支持覆盖已有服务或转换旧状态。默认不授权 Sunshine 重启。
 
 构建由 `scripts/package-client.py` 统一完成：Windows 使用系统 C# 编译器及固定 WiX 4.0.6，Linux 使用 `dpkg-deb`。
 CI 在一次性 GitHub 托管主机上验证 MSI/DEB 的真实安装、初始化、服务重启、拒绝覆盖和卸载保留状态；这些测试禁止在用户主机上运行。
 
-本仓库 Client 标签使用 `v0.1.0-rc.2` 形式，和 Server 仓库分别发行。下载请查看 [GitHub Releases](https://github.com/isarmg/sunshine-manager-client/releases)。
+本仓库 Client 标签使用 `v0.1.0-rc.3` 形式，和 Server 仓库分别发行。下载请查看 [GitHub Releases](https://github.com/isarmg/sunshine-manager-client/releases)。
 发行项为 Windows MSI、Linux DEB、Windows ZIP、Linux tar.gz 及各自 SHA-256 文件；归档含二进制、安装/卸载脚本、
 无秘密的 bootstrap 示例、许可证、manifest 和逐文件 SHA256SUMS。
 二进制 `--version` 与 manifest 绑定完整源码提交。Windows 使用静态 MSVC CRT，**没有 Authenticode 签名**。
@@ -63,9 +63,9 @@ Administrators 和 SYSTEM，拒绝重解析点或不受保护输入。注册成�
 先核验官方附件校验和并解包：
 
 ```sh
-sha256sum --check sunshine-client-0.1.0-rc.2-x86_64-unknown-linux-gnu.tar.gz.sha256
-tar -xzf sunshine-client-0.1.0-rc.2-x86_64-unknown-linux-gnu.tar.gz
-cd sunshine-client-0.1.0-rc.2-x86_64-unknown-linux-gnu
+sha256sum --check sunshine-client-0.1.0-rc.3-x86_64-unknown-linux-gnu.tar.gz.sha256
+tar -xzf sunshine-client-0.1.0-rc.3-x86_64-unknown-linux-gnu.tar.gz
+cd sunshine-client-0.1.0-rc.3-x86_64-unknown-linux-gnu
 sudo bash install-linux.sh "$PWD/sunshine-client" /absolute/private/bootstrap.json
 systemctl status sunshine-client.service
 ```

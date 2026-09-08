@@ -69,7 +69,8 @@ echo 'Device identity and journal retained. Revoke the device in Manager before 
             path = stage / 'DEBIAN' / name
             path.write_text(contents)
             path.chmod(0o755)
-        subprocess.run(['dpkg-deb', '--root-owner-group', '--build', str(stage), str(args.output / f'sunshine-client_{version}_amd64.deb')], check=True)
+        # Keep Debian's tilde ordering in control, but use a GitHub-safe asset name.
+        subprocess.run(['dpkg-deb', '--root-owner-group', '--build', str(stage), str(args.output / f'sunshine-client_{args.version}_amd64.deb')], check=True)
 
 
 if __name__ == '__main__':

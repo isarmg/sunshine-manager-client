@@ -29,7 +29,8 @@ class InstallerTests(unittest.TestCase):
             binary.write_bytes(b'package-layout-fixture')
             binary.chmod(0o755)
             subprocess.run(['python3', str(ROOT / 'scripts/build-linux-installer.py'), '--binary', str(binary), '--output', tmp, '--version', '0.1.0-rc.1'], check=True, stdout=subprocess.DEVNULL)
-            deb = directory / 'sunshine-client_0.1.0~rc1_amd64.deb'
+            deb = directory / 'sunshine-client_0.1.0-rc.1_amd64.deb'
+            self.assertEqual(subprocess.check_output(['dpkg-deb', '-f', str(deb), 'Version'], text=True).strip(), '0.1.0~rc1')
             self.assertEqual(subprocess.check_output(['dpkg-deb', '-f', str(deb), 'Architecture'], text=True).strip(), 'amd64')
             subprocess.run(['dpkg-deb', '-x', str(deb), str(directory / 'extracted')], check=True)
             setup = directory / 'extracted/usr/bin/sunshine-client-setup'
