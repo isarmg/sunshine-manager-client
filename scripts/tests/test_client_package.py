@@ -72,12 +72,20 @@ class PackageTests(unittest.TestCase):
                     checker.verify(archive, root, SHA)
 
     def test_macos_archives_keep_their_actual_architecture(self):
-        for target in ["x86_64-apple-darwin", "aarch64-apple-darwin"]:
+        for target in ["aarch64-apple-darwin"]:
             with self.subTest(target=target), tempfile.TemporaryDirectory() as tmp:
                 root = Path(tmp)
                 archive = self.fixture(root, mac_target=target)
                 with patch.object(checker, "run", return_value=f"sunshine-client {VERSION} (git {SHA}; sunshine-management/1)"):
                     checker.verify(archive, root, SHA)
+
+    def test_intel_macos_archive_is_not_a_supported_release(self):
+        with tempfile.TemporaryDirectory() as tmp:
+            root = Path(tmp)
+            archive = self.fixture(root, mac_target="x86_64-apple-darwin")
+            with patch.object(checker, "run") as executable, self.assertRaises(ValueError):
+                checker.verify(archive, root, SHA)
+            executable.assert_not_called()
 
     def test_traversal_extra_and_duplicate_entries_rejected(self):
         for windows in [False, True]:

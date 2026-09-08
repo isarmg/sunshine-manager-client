@@ -37,7 +37,7 @@ def verify(archive, destination, sha):
     windows = archive.suffix == ".zip"
     suffix = ".zip" if windows else ".tar.gz"
     name = archive.name.removesuffix(suffix)
-    match = re.fullmatch(r"sunshine-client-[0-9]+\.[0-9]+\.[0-9]+(?:-rc\.[0-9]+)?-(?P<target>x86_64-pc-windows-msvc|x86_64-unknown-linux-gnu|(?:x86_64|aarch64)-apple-darwin)", name)
+    match = re.fullmatch(r"sunshine-client-[0-9]+\.[0-9]+\.[0-9]+(?:-rc\.[0-9]+)?-(?P<target>x86_64-pc-windows-msvc|x86_64-unknown-linux-gnu|aarch64-apple-darwin)", name)
     if match is None:
         raise ValueError("unexpected archive name")
     target = match["target"]
