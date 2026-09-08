@@ -19,6 +19,7 @@ fn default_state() -> PathBuf {
 }
 fn service() -> Service {
     Service {
+        #[cfg(not(target_os = "macos"))]
         name: if cfg!(windows) {
             "SunshineClient"
         } else {
