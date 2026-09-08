@@ -112,7 +112,7 @@ def install_test(root, binary, temporary, installer=None):
     fixture = temporary / "private-bootstrap"
     fixture.mkdir(mode=0o700)
     bootstrap = fixture / "bootstrap.json"
-    bootstrap.write_text(json.dumps({"manager_endpoint": "wss://127.0.0.1:9/sunshine-client/v1/connect", "manager_ca_pem": ca.read_text(), "manager_id": "11111111-1111-4111-8111-111111111111", "device_id": "22222222-2222-4222-8222-222222222222", "enrollment_token": "a" * 64, "sunshine_endpoint": "https://127.0.0.1:47990/", "sunshine_ca_pem": ca.read_text(), "sunshine_username": "test", "sunshine_password": "installation-fixture-only", "restart_allowed": False}), encoding="utf-8")
+    bootstrap.write_text(json.dumps({"manager_endpoint": "wss://127.0.0.1:9/sunshine-client/v1/connect", "enrollment_token": "a" * 64, "sunshine_endpoint": "https://127.0.0.1:47990/", "sunshine_username": "test", "sunshine_password": "installation-fixture-only", "restart_allowed": False}), encoding="utf-8")
     bootstrap.chmod(0o600)
     if windows:
         # Protect only the secret fixture, not extracted executable/scripts. Set explicit
@@ -152,8 +152,9 @@ foreach($path in @('{escaped}', '{escaped}\\bootstrap.json')) {{
                 if tray.poll() is None:
                     tray.terminate()
                 tray.wait(timeout=15)
-            if powershell("(Get-Service SunshineClient).Status") != 'Running':
-                raise ValueError('tray exit stopped management service')
+            subprocess.run([str(installed / 'sunshine-client-tray.exe'), '--stop-service'], check=True, timeout=60)
+            if powershell("(Get-Service SunshineClient).Status") != 'Stopped':
+                raise ValueError('tray exit action did not stop management service')
         else:
             subprocess.run(install, check=True, env=powershell_environment())
         if subprocess.run(install, stdout=subprocess.DEVNULL, stderr=subprocess.DEVNULL, env=powershell_environment()).returncode == 0:
@@ -174,9 +175,10 @@ foreach($path in @('{escaped}', '{escaped}\\bootstrap.json')) {{
         install = ["bash", str(root / "install-linux.sh"), str(binary), str(bootstrap)]
         if installer:
             subprocess.run(['dpkg', '--install', str(installer)], check=True)
-            # Exercise the same interactive setup entry point users run, with fixture input.
-            answers = '\n'.join(['wss://127.0.0.1:9/sunshine-client/v1/connect', '11111111-1111-4111-8111-111111111111', '22222222-2222-4222-8222-222222222222', 'https://127.0.0.1:47990/', 'test', 'a' * 64, 'installation-fixture-only', str(ca), str(ca)]) + '\n'
-            subprocess.run(['sunshine-client-setup'], input=answers, text=True, check=True)
+            # Offline installation is separate from successful online pairing.
+            subprocess.run([str(binary), 'init', '--state', '/var/lib/sunshine-client', '--bootstrap', str(bootstrap)], check=True)
+            subprocess.run(['chown', '-R', 'sunshine-client:sunshine-client', '/var/lib/sunshine-client'], check=True)
+            subprocess.run(['systemctl', 'enable', '--now', 'sunshine-client.service'], check=True)
         else:
             subprocess.run(install, check=True)
         if subprocess.run(install, stdout=subprocess.DEVNULL, stderr=subprocess.DEVNULL).returncode == 0:
@@ -185,13 +187,13 @@ foreach($path in @('{escaped}', '{escaped}\\bootstrap.json')) {{
         time.sleep(3)
         subprocess.run(["systemctl", "is-active", "--quiet", "sunshine-client.service"], check=True)
         state = Path("/var/lib/sunshine-client/provisioning")
-        if (state.stat().st_mode & 0o077) != 0 or not (state / "identity.json").is_file():
-            raise ValueError("protected persistent identity missing")
+        if (state.stat().st_mode & 0o077) != 0 or not (state / "bootstrap.json").is_file():
+            raise ValueError("protected pending configuration missing")
         if installer:
             subprocess.run(['dpkg', '--remove', 'sunshine-client'], check=True)
         else:
             subprocess.run(["bash", str(root / "uninstall-linux.sh")], check=True)
-        if not (state / "identity.json").is_file():
+        if not (state / "bootstrap.json").is_file():
             raise ValueError("uninstall removed protected state")
     print("Native install, autostart configuration, restart, overwrite refusal and state-preserving uninstall passed; no real Sunshine was modified.")
 

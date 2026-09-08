@@ -1,7 +1,8 @@
 <Wix xmlns="http://wixtoolset.org/schemas/v4/wxs" xmlns:ui="http://wixtoolset.org/schemas/v4/wxs/ui">
   <Package Name="Sunshine Client" Manufacturer="sarmg" Version="$(var.ProductVersion)" Scope="perMachine" InstallerVersion="500">
     <MediaTemplate EmbedCab="yes" />
-    <Launch Condition="VersionNT64" Message="Sunshine Client requires 64-bit Windows." />
+    <Property Id="WINDOWSBUILD"><RegistrySearch Id="WindowsBuild" Root="HKLM" Key="SOFTWARE\Microsoft\Windows NT\CurrentVersion" Name="CurrentBuildNumber" Type="raw" Bitness="always64" /></Property>
+    <Launch Condition="Installed OR (VersionNT64 AND WINDOWSBUILD &gt;= 22000)" Message="Sunshine Client requires Windows 11 x64 (build 22000) or newer." />
     <Property Id="EXISTINGCLIENTSERVICE"><RegistrySearch Id="ExistingService" Root="HKLM" Key="SYSTEM\CurrentControlSet\Services\SunshineClient" Name="ImagePath" Type="raw" Bitness="always64" /></Property>
     <Launch Condition="Installed OR NOT EXISTINGCLIENTSERVICE" Message="A Sunshine Client service already exists. This installer will not overwrite it." />
     <Property Id="ARPURLINFOABOUT" Value="https://github.com/isarmg/sunshine-manager-client" />
@@ -14,7 +15,7 @@
       <Directory Id="INSTALLFOLDER" Name="SunshineClient">
         <Component Id="ClientService" Guid="4C3D6380-EB5B-45B8-B9F7-77B28CD14E82" Bitness="always64">
           <File Id="ClientExe" Source="$(var.ClientExe)" Name="sunshine-client.exe" KeyPath="yes" />
-          <ServiceInstall Id="ServiceInstall" Name="SunshineClient" DisplayName="Sunshine Client" Description="Sunshine management only; configure pairing from the Start menu." Type="ownProcess" Start="auto" ErrorControl="normal" Arguments="service --state &quot;[CommonAppDataFolder]SunshineClient&quot;" />
+          <ServiceInstall Id="ServiceInstall" Name="SunshineClient" DisplayName="Sunshine Client" Description="Sunshine management only; configure pairing from the Start menu." Type="ownProcess" Start="demand" ErrorControl="normal" Arguments="service --state &quot;[CommonAppDataFolder]SunshineClient&quot;" />
           <!-- Do not start until the administrator has completed local pairing setup. -->
           <ServiceControl Id="ServiceControl" Name="SunshineClient" Stop="both" Remove="uninstall" Wait="yes" />
         </Component>

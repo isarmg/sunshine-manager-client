@@ -60,7 +60,7 @@ pub struct HealthObservation {
 pub struct ManagerConnection {
     endpoint: Url,
     credential: Zeroizing<String>,
-    tls: Arc<rustls::ClientConfig>,
+    tls: Connector,
 }
 
 impl ManagerConnection {
@@ -82,6 +82,18 @@ impl ManagerConnection {
         if root_pem.len() > 1024 * 1024 {
             return Err(TransportError::Configuration);
         }
+        if root_pem.is_empty() {
+            return Ok(Self {
+                endpoint,
+                credential,
+                tls: Connector::NativeTls(
+                    native_tls::TlsConnector::builder()
+                        .min_protocol_version(Some(native_tls::Protocol::Tlsv12))
+                        .build()
+                        .map_err(|_| TransportError::Configuration)?,
+                ),
+            });
+        }
         let mut roots = rustls::RootCertStore::empty();
         for certificate in CertificateDer::pem_slice_iter(root_pem) {
             roots
@@ -97,7 +109,7 @@ impl ManagerConnection {
         Ok(Self {
             endpoint,
             credential,
-            tls: Arc::new(tls),
+            tls: Connector::Rustls(Arc::new(tls)),
         })
     }
 
@@ -123,12 +135,7 @@ impl ManagerConnection {
         config.max_write_buffer_size = MAX_MESSAGE_BYTES * 2;
         let (socket, response) = timeout(
             IO_TIMEOUT,
-            connect_async_tls_with_config(
-                request,
-                Some(config),
-                false,
-                Some(Connector::Rustls(self.tls.clone())),
-            ),
+            connect_async_tls_with_config(request, Some(config), false, Some(self.tls.clone())),
         )
         .await
         .map_err(|_| TransportError::Disconnected)?

@@ -2,6 +2,7 @@
 param([Parameter(Mandatory=$true)][string]$Binary,[Parameter(Mandatory=$true)][string]$Bootstrap)
 $ErrorActionPreference = 'Stop'
 if ([System.Runtime.InteropServices.RuntimeInformation]::OSArchitecture -ne 'X64') { throw 'Windows x86_64 required' }
+if ([int](Get-ItemPropertyValue 'HKLM:\SOFTWARE\Microsoft\Windows NT\CurrentVersion' 'CurrentBuildNumber') -lt 22000) { throw 'Windows 11 or newer required' }
 foreach ($source in @($Binary,$Bootstrap)) {
   if ($source -notmatch '^[A-Za-z]:\\') { throw 'Absolute local drive paths required' }
   $item = Get-Item -LiteralPath $source
@@ -40,7 +41,7 @@ Get-ChildItem -LiteralPath $stateDir -Recurse -Force | ForEach-Object {
 }
 Protect-LocalPath $stateDir $true
 $command = '"' + $target + '" service --state "' + $stateDir + '"'
-$null = New-Service -Name SunshineClient -DisplayName 'Sunshine management Client' -BinaryPathName $command -StartupType Automatic -Description 'Independent management only; no video forwarding or general remote control.'
+$null = New-Service -Name SunshineClient -DisplayName 'Sunshine management Client' -BinaryPathName $command -StartupType Manual -Description 'Independent management only; no video forwarding or general remote control.'
 Start-Service SunshineClient
 (Get-Service SunshineClient).WaitForStatus('Running',[TimeSpan]::FromSeconds(30))
 Write-Host 'Client installed. Verify registration, then remove the original protected bootstrap. No Sunshine process or firewall rule was changed.'

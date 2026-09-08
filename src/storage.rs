@@ -84,8 +84,13 @@ impl ProtectedState {
                 .read_private_bounded(&name, 2 * 1024 * 1024)
                 .map_err(storage_error)?,
         );
-        if self.read("bootstrap.json")?.is_some() || self.read("identity.json")?.is_some() {
-            return Err(StorageError);
+        if let Some(identity) = self.read("identity.json")? {
+            return if crate::provisioning::pending_retry(&bytes, &zeroize::Zeroizing::new(identity))
+            {
+                Ok(())
+            } else {
+                Err(StorageError)
+            };
         }
         crate::provisioning::validate_bootstrap(&bytes).map_err(storage_error)?;
         self.put("bootstrap.json", &bytes)

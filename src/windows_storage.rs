@@ -332,11 +332,16 @@ impl ProtectedState {
         file.take(2 * 1024 * 1024 + 1)
             .read_to_end(&mut bytes)
             .map_err(storage_error)?;
-        if bytes.len() > 2 * 1024 * 1024
-            || self.read("bootstrap.json")?.is_some()
-            || self.read("identity.json")?.is_some()
-        {
+        if bytes.len() > 2 * 1024 * 1024 {
             return Err(StorageError);
+        }
+        if let Some(identity) = self.read("identity.json")? {
+            return if crate::provisioning::pending_retry(&bytes, &zeroize::Zeroizing::new(identity))
+            {
+                Ok(())
+            } else {
+                Err(StorageError)
+            };
         }
         crate::provisioning::validate_bootstrap(&bytes).map_err(storage_error)?;
         self.put("bootstrap.json", &bytes)

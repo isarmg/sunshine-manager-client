@@ -174,8 +174,11 @@ impl LocalSunshine {
         {
             return Err(AdapterError::InvalidLocalEndpoint);
         }
-        let root =
-            Certificate::from_pem(root_pem).map_err(|_| AdapterError::InvalidLocalEndpoint)?;
+        let roots = if root_pem.is_empty() {
+            Vec::new()
+        } else {
+            vec![Certificate::from_pem(root_pem).map_err(|_| AdapterError::InvalidLocalEndpoint)?]
+        };
         let client = SecureHttpClient::new(
             Duration::from_secs(15),
             ResponseBudget {
@@ -184,7 +187,7 @@ impl LocalSunshine {
             },
             TlsConfig {
                 identity: None,
-                roots: vec![root],
+                roots,
             },
             format!("sunshine-client/{}", env!("CARGO_PKG_VERSION")),
         )

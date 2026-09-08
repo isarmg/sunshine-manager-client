@@ -14,7 +14,7 @@ class InstallerTests(unittest.TestCase):
         ns = {'w': 'http://wixtoolset.org/schemas/v4/wxs'}
         service = tree.find('.//w:ServiceInstall', ns)
         self.assertEqual(service.get('Name'), 'SunshineClient')
-        self.assertEqual(service.get('Start'), 'auto')
+        self.assertEqual(service.get('Start'), 'demand')
         self.assertIn('service --state', service.get('Arguments'))
         self.assertIsNone(tree.find('.//w:ServiceControl', ns).get('Start'))
         self.assertTrue(tree.findall('.//w:RegistryValue', ns))

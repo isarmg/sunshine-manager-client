@@ -32,7 +32,7 @@ def main():
 Version: {version}
 Architecture: amd64
 Maintainer: sarmg <maintainers@sarmg.org>
-Depends: libc6 (>= 2.39), libgcc-s1, python3, systemd, passwd
+Depends: libc6 (>= 2.39), libgcc-s1, libssl3t64, ca-certificates, python3, systemd, passwd
 Section: admin
 Priority: optional
 Description: Sunshine management client

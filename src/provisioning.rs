@@ -7,9 +7,7 @@ use crate::{
     transport::{HealthObservation, ManagerConnection, TransportError},
 };
 use rand::RngCore;
-use sarmg_client_secure_http::{
-    Certificate, NetworkPolicy, ResponseBudget, SecureHttpClient, TlsConfig, Url,
-};
+use sarmg_client_secure_http::{NetworkPolicy, ResponseBudget, SecureHttpClient, TlsConfig, Url};
 use serde::{Deserialize, Serialize};
 use std::{path::Path, sync::Arc, time::Duration};
 use sunshine_client_protocol::{
@@ -19,16 +17,12 @@ use tokio::sync::watch;
 use uuid::Uuid;
 use zeroize::Zeroizing;
 
-#[derive(Serialize, Deserialize)]
+#[derive(Serialize, Deserialize, PartialEq)]
 #[serde(deny_unknown_fields)]
 pub struct Bootstrap {
     pub manager_endpoint: String,
-    pub manager_ca_pem: String,
-    pub manager_id: Uuid,
-    pub device_id: Uuid,
     pub enrollment_token: Zeroizing<String>,
     pub sunshine_endpoint: String,
-    pub sunshine_ca_pem: String,
     pub sunshine_username: Zeroizing<String>,
     pub sunshine_password: Zeroizing<String>,
     #[serde(default)]
@@ -65,18 +59,22 @@ pub(crate) fn validate_bootstrap(bytes: &[u8]) -> Result<(), ProvisionError> {
     let config: Bootstrap = serde_json::from_slice(bytes).map_err(config_error)?;
     config.validate()
 }
+pub(crate) fn pending_retry(config: &[u8], identity: &[u8]) -> bool {
+    let Ok(incoming) = serde_json::from_slice::<Bootstrap>(config) else {
+        return false;
+    };
+    let Ok(existing) = serde_json::from_slice::<Identity>(identity) else {
+        return false;
+    };
+    !existing.enrolled && incoming == existing.config
+}
 
 impl Bootstrap {
     fn validate(&self) -> Result<(), ProvisionError> {
-        if self.manager_id.is_nil() || self.device_id.is_nil() || self.enrollment_token.len() != 64
-        {
+        if self.enrollment_token.len() != 64 {
             return Err(ProvisionError::Configuration);
         }
-        ManagerConnection::new(
-            &self.manager_endpoint,
-            Zeroizing::new("a".repeat(64)),
-            self.manager_ca_pem.as_bytes(),
-        )?;
+        ManagerConnection::new(&self.manager_endpoint, Zeroizing::new("a".repeat(64)), &[])?;
         self.adapter()?;
         Ok(())
     }
@@ -85,7 +83,7 @@ impl Bootstrap {
             &self.sunshine_endpoint,
             &self.sunshine_username,
             self.sunshine_password.clone(),
-            self.sunshine_ca_pem.as_bytes(),
+            &[],
         )
         .map_err(config_error)
     }
@@ -98,7 +96,58 @@ impl Identity {
     }
 }
 
-/// Persist independent random identity before the first network request. Never regenerate on retry.
+fn system_client() -> Result<SecureHttpClient, ProvisionError> {
+    SecureHttpClient::new(
+        Duration::from_secs(15),
+        ResponseBudget {
+            max_header_bytes: 16384,
+            max_body_bytes: 16384,
+        },
+        TlsConfig::default(),
+        format!("sunshine-client/{}", env!("CARGO_PKG_VERSION")),
+    )
+    .map_err(config_error)
+}
+#[derive(Deserialize)]
+#[serde(deny_unknown_fields)]
+struct PairingTarget {
+    manager_id: Uuid,
+    device_id: Uuid,
+}
+async fn resolve_pairing(config: &Bootstrap) -> Result<PairingTarget, ProvisionError> {
+    let mut endpoint = Url::parse(&config.manager_endpoint).map_err(config_error)?;
+    endpoint.set_scheme("https").map_err(config_error)?;
+    endpoint.set_path("/sunshine-client/v1/pairing");
+    let mut request = reqwest::Request::new(reqwest::Method::POST, endpoint);
+    request.headers_mut().insert(
+        reqwest::header::CONTENT_TYPE,
+        reqwest::header::HeaderValue::from_static("application/json"),
+    );
+    *request.body_mut() = Some(
+        serde_json::to_vec(&serde_json::json!({"token":config.enrollment_token.as_str()}))
+            .map_err(config_error)?
+            .into(),
+    );
+    let response = system_client()?
+        .execute(
+            NetworkPolicy::PrivateDevice {
+                allow_loopback: true,
+                allow_link_local: false,
+            },
+            request,
+        )
+        .await
+        .map_err(|_| ProvisionError::Unavailable)?;
+    if !response.status.is_success() {
+        return Err(ProvisionError::Rejected);
+    }
+    let target: PairingTarget = serde_json::from_slice(&response.body).map_err(config_error)?;
+    if target.manager_id.is_nil() || target.device_id.is_nil() {
+        return Err(ProvisionError::Configuration);
+    }
+    Ok(target)
+}
+/// Persist independent random identity before enrollment. Never regenerate on retry.
 async fn provision(store: &ProtectedState) -> Result<Identity, ProvisionError> {
     let mut identity = if let Some(bytes) = store.read("identity.json")? {
         serde_json::from_slice::<Identity>(&Zeroizing::new(bytes)).map_err(config_error)?
@@ -110,13 +159,14 @@ async fn provision(store: &ProtectedState) -> Result<Identity, ProvisionError> {
         );
         let config: Bootstrap = serde_json::from_slice(&bytes).map_err(config_error)?;
         config.validate()?;
+        let target = resolve_pairing(&config).await?;
         let mut random = [0u8; 32];
         rand::rngs::OsRng.fill_bytes(&mut random);
         let credential = Zeroizing::new(random.iter().map(|b| format!("{b:02x}")).collect());
         let value = Identity {
             binding: Binding {
-                manager_id: config.manager_id,
-                device_id: config.device_id,
+                manager_id: target.manager_id,
+                device_id: target.device_id,
                 installation_id: Uuid::new_v4(),
             },
             credential,
@@ -132,22 +182,7 @@ async fn provision(store: &ProtectedState) -> Result<Identity, ProvisionError> {
     let mut endpoint = Url::parse(&identity.config.manager_endpoint).map_err(config_error)?;
     endpoint.set_scheme("https").map_err(config_error)?;
     endpoint.set_path("/sunshine-client/v1/identity");
-    let client = SecureHttpClient::new(
-        Duration::from_secs(15),
-        ResponseBudget {
-            max_header_bytes: 16384,
-            max_body_bytes: 16384,
-        },
-        TlsConfig {
-            identity: None,
-            roots: vec![
-                Certificate::from_pem(identity.config.manager_ca_pem.as_bytes())
-                    .map_err(config_error)?,
-            ],
-        },
-        format!("sunshine-client/{}", env!("CARGO_PKG_VERSION")),
-    )
-    .map_err(config_error)?;
+    let client = system_client()?;
     let policy = NetworkPolicy::PrivateDevice {
         allow_loopback: true,
         allow_link_local: false,
@@ -198,6 +233,26 @@ async fn provision(store: &ProtectedState) -> Result<Identity, ProvisionError> {
     Ok(identity)
 }
 
+/// Local wizard completion requires a verified Sunshine read and successful enrollment.
+pub async fn pair(state_path: &Path) -> Result<(), ProvisionError> {
+    let _root = crate::storage::prepare_root(state_path)?;
+    let store = ProtectedState::open(&state_path.join("provisioning"))?;
+    let config: Bootstrap = if let Some(bytes) = store.read("identity.json")? {
+        serde_json::from_slice::<Identity>(&Zeroizing::new(bytes))
+            .map_err(config_error)?
+            .config
+    } else {
+        serde_json::from_slice(&Zeroizing::new(
+            store
+                .read("bootstrap.json")?
+                .ok_or(ProvisionError::Configuration)?,
+        ))
+        .map_err(config_error)?
+    };
+    config.adapter()?.read().await.map_err(config_error)?;
+    provision(&store).await?;
+    Ok(())
+}
 pub async fn run(state_path: &Path, shutdown: watch::Receiver<bool>) -> Result<(), ProvisionError> {
     let _root = crate::storage::prepare_root(state_path)?;
     let store = ProtectedState::open(&state_path.join("provisioning"))?;
@@ -222,11 +277,8 @@ pub async fn run(state_path: &Path, shutdown: watch::Receiver<bool>) -> Result<(
         identity.config.adapter()?,
         journal,
     ));
-    let connection = ManagerConnection::new(
-        &identity.config.manager_endpoint,
-        identity.credential,
-        identity.config.manager_ca_pem.as_bytes(),
-    )?;
+    let connection =
+        ManagerConnection::new(&identity.config.manager_endpoint, identity.credential, &[])?;
     let capabilities = Capabilities {
         protocol: PROTOCOL.into(),
         client_version: env!("CARGO_PKG_VERSION").into(),
@@ -266,6 +318,46 @@ pub async fn run(state_path: &Path, shutdown: watch::Receiver<bool>) -> Result<(
 
 #[cfg(test)]
 mod bootstrap_tests {
+    fn configuration() -> serde_json::Value {
+        serde_json::json!({"manager_endpoint":"wss://manager.example.org/sunshine-client/v1/connect", "enrollment_token":"a".repeat(64),
+            "sunshine_endpoint":"https://127.0.0.1:47990/", "sunshine_username":"fixture", "sunshine_password":"local-only", "restart_allowed":false})
+    }
+    #[test]
+    fn bootstrap_only_accepts_system_trust_and_server_resolved_binding() {
+        let config = configuration();
+        assert!(super::validate_bootstrap(&serde_json::to_vec(&config).unwrap()).is_ok());
+        for field in [
+            "manager_ca_pem",
+            "sunshine_ca_pem",
+            "manager_id",
+            "device_id",
+        ] {
+            let mut extra = config.clone();
+            extra[field] = serde_json::json!("not permitted");
+            assert!(super::validate_bootstrap(&serde_json::to_vec(&extra).unwrap()).is_err());
+        }
+    }
+    #[test]
+    fn retry_preserves_pending_identity_and_refuses_changed_or_enrolled_configuration() {
+        let config = configuration();
+        let bytes = serde_json::to_vec(&config).unwrap();
+        let mut identity = serde_json::json!({"binding":{"manager_id":uuid::Uuid::new_v4(),"device_id":uuid::Uuid::new_v4(),"installation_id":uuid::Uuid::new_v4()},"credential":"b".repeat(64),"config":config,"enrolled":false});
+        assert!(super::pending_retry(
+            &bytes,
+            &serde_json::to_vec(&identity).unwrap()
+        ));
+        identity["config"]["enrollment_token"] = serde_json::json!("c".repeat(64));
+        assert!(!super::pending_retry(
+            &bytes,
+            &serde_json::to_vec(&identity).unwrap()
+        ));
+        identity["config"] = configuration();
+        identity["enrolled"] = serde_json::json!(true);
+        assert!(!super::pending_retry(
+            &bytes,
+            &serde_json::to_vec(&identity).unwrap()
+        ));
+    }
     #[test]
     fn incomplete_or_example_bootstrap_is_not_accepted() {
         for bytes in [

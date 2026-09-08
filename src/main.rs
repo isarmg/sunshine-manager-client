@@ -29,7 +29,7 @@ fn main() -> ExitCode {
 }
 fn execute(args: &[std::ffi::OsString]) -> Result<(), String> {
     if args.len() < 3 || args[1] != "--state" {
-        return Err("Usage: sunshine-client init --state ABSOLUTE_PATH --bootstrap PROTECTED_FILE | run --state ABSOLUTE_PATH | --version".into());
+        return Err("Usage: sunshine-client init --state ABSOLUTE_PATH --bootstrap PROTECTED_FILE | pair --state ABSOLUTE_PATH | run --state ABSOLUTE_PATH | --version".into());
     }
     let path = PathBuf::from(&args[2]);
     if !path.is_absolute() {
@@ -46,6 +46,12 @@ fn execute(args: &[std::ffi::OsString]) -> Result<(), String> {
             "Protected bootstrap imported; registration occurs when Client starts. Remove the original bootstrap after successful registration."
         );
         return Ok(());
+    }
+    if args[0] == "pair" && args.len() == 3 {
+        return tokio::runtime::Runtime::new()
+            .map_err(|_| "Client runtime unavailable")?
+            .block_on(provisioning::pair(&path))
+            .map_err(|e| e.to_string());
     }
     if args[0] != "run" || args.len() != 3 {
         return Err("Invalid Client command".into());
