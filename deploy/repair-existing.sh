@@ -1,6 +1,7 @@
 #!/usr/bin/env bash
 # Called only after the platform installer validates root and source binary.
 set -euo pipefail
+trap 'echo "Client repair failed at line $LINENO (exit $?). Check account ownership and the reported installation path." >&2' ERR
 source_binary=$1
 resource_dir=$2
 os=$(uname -s)
@@ -41,8 +42,8 @@ check_parent() {
   local p=$1 mode
   while [[ $p != / ]]; do
     if [[ ! -e $p && ! -L $p ]]; then p=$(dirname "$p"); continue; fi
-    [[ -d $p && ! -L $p && $(meta "$uid_format" "$p") = 0 ]] || exit 8
-    mode=$(meta "$mode_format" "$p"); (( (8#$mode & 0022) == 0 )) || exit 8
+    [[ -d $p && ! -L $p && $(meta "$uid_format" "$p") = 0 ]] || { echo "Untrusted parent directory: $p" >&2; exit 8; }
+    mode=$(meta "$mode_format" "$p"); (( (8#$mode & 0022) == 0 )) || { echo "Parent directory is group/other writable: $p (mode $mode)" >&2; exit 8; }
     p=$(dirname "$p")
   done
 }

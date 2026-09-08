@@ -1,7 +1,6 @@
 <Wix xmlns="http://wixtoolset.org/schemas/v4/wxs" xmlns:ui="http://wixtoolset.org/schemas/v4/wxs/ui">
   <Package UpgradeCode="A0D593E5-31A3-4675-9821-BE03D92AD465" Name="Sunshine Client" Manufacturer="sarmg" Version="$(var.ProductVersion)" Scope="perMachine" InstallerVersion="500">
     <MajorUpgrade AllowSameVersionUpgrades="yes" DowngradeErrorMessage="A newer Sunshine Client is installed." Schedule="afterInstallInitialize" />
-    <Property Id="REINSTALLMODE" Value="amus" />
     <MediaTemplate EmbedCab="yes" />
     <Property Id="WINDOWSBUILD"><RegistrySearch Id="WindowsBuild" Root="HKLM" Key="SOFTWARE\Microsoft\Windows NT\CurrentVersion" Name="CurrentBuildNumber" Type="raw" Bitness="always64" /></Property>
     <Launch Condition="Installed OR (VersionNT64 AND WINDOWSBUILD &gt;= 22000)" Message="Sunshine Client requires Windows 11 x64 (build 22000) or newer." />
