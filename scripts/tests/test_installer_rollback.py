@@ -22,7 +22,7 @@ accounts.mkdir(exist_ok=True)
 if name == "id": print("0"); sys.exit(0)
 if name == "uname": print("x86_64" if args == ["-m"] else os.environ["FIXTURE_OS"]); sys.exit(0)
 if name == "stat":
- p = Path(args[-1]); print(p.stat().st_uid if args[-2] in ("%u",) else oct(p.stat().st_mode & 0o777)[2:]); sys.exit(0)
+ p = Path(args[-1]); print(0 if args[-2] in ("%u",) else oct(p.stat().st_mode & 0o777)[2:]); sys.exit(0)
 if name == "getent": sys.exit(0 if (accounts / args[0]).exists() else 2)
 if name == "dscl" and args[1] == "-read": sys.exit(0 if (accounts / ("passwd" if args[2].startswith("/Users/") else "group")).exists() else 1)
 if name == "dscl" and args[1] == "-search": sys.exit(0)

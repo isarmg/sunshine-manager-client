@@ -132,6 +132,7 @@ jobs:
           cargo build --locked --example native_acceptance_seed
       - name: Exercise actual launchd, service account, readonly IPC and state-preserving uninstall
         run: |
+          bash scripts/prepare-native-macos-fixture.sh "$PWD/target/release/sunshine-client"
           sudo sh deploy/macos/install-macos.sh "$PWD/target/release/sunshine-client"
           sudo env GITHUB_ACTIONS=true RUNNER_ENVIRONMENT="$RUNNER_ENVIRONMENT" python3 scripts/native-service-acceptance.py --binary /usr/local/libexec/sunshine-client --seed "$PWD/target/debug/examples/native_acceptance_seed" --state "/Library/Application Support/sunshine-client" --service-user _sunshineclient:_sunshineclient
           sudo sh deploy/macos/uninstall-macos.sh
@@ -162,6 +163,7 @@ jobs:
           cargo build --locked --example native_acceptance_seed
       - name: Exercise actual launchd, service account, readonly IPC and state-preserving uninstall
         run: |
+          bash scripts/prepare-native-macos-fixture.sh "$PWD/target/release/sunshine-client"
           sudo sh deploy/macos/install-macos.sh "$PWD/target/release/sunshine-client"
           sudo env GITHUB_ACTIONS=true RUNNER_ENVIRONMENT="$RUNNER_ENVIRONMENT" python3 scripts/native-service-acceptance.py --binary /usr/local/libexec/sunshine-client --seed "$PWD/target/debug/examples/native_acceptance_seed" --state "/Library/Application Support/sunshine-client" --service-user _sunshineclient:_sunshineclient
           sudo sh deploy/macos/uninstall-macos.sh
