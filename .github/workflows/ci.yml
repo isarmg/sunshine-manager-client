@@ -138,6 +138,11 @@ jobs:
           sudo sh deploy/macos/uninstall-macos.sh
           sudo test -f "/Library/Application Support/sunshine-client/provisioning/identity.json"
           sudo test -d "/Library/Application Support/sunshine-client/journal"
+          sudo cp "/Library/Application Support/sunshine-client/provisioning/identity.json" "$RUNNER_TEMP/identity-before-reinstall.json"
+          sudo sh deploy/macos/install-macos.sh "$PWD/target/release/sunshine-client"
+          sudo cmp "$RUNNER_TEMP/identity-before-reinstall.json" "/Library/Application Support/sunshine-client/provisioning/identity.json"
+          sudo sh deploy/macos/install-macos.sh "$PWD/target/release/sunshine-client"
+          sudo sh deploy/macos/uninstall-macos.sh
       - name: Package and independently verify the native Mac archive
         run: |
           python3 scripts/package-client.py --output "$RUNNER_TEMP/client-output"

@@ -13,15 +13,14 @@ if [[ $("$binary" --version) != sunshine-client\ * ]]; then
   echo "Expected a verified Sunshine Client binary." >&2
   exit 1
 fi
+script_dir=$(cd -- "$(dirname -- "$0")" && pwd)
 for target in /opt/sunshine-client /var/lib/sunshine-client /etc/systemd/system/sunshine-client.service /usr/local/bin/sunshine-client; do
   if [[ -e $target || -L $target ]]; then
-    echo "Refusing to overwrite an existing installation or state. Upgrade/restore belongs to sarmg-upgrade." >&2
-    exit 1
+    exec bash "$script_dir/repair-existing.sh" "$binary" "$script_dir"
   fi
 done
 if getent passwd sunshine-client >/dev/null || getent group sunshine-client >/dev/null; then
-  echo "Service account already exists; review it before installing." >&2
-  exit 1
+  echo 'Service account exists without protected state; inspection required.' >&2; exit 8
 fi
 script_dir=$(cd -- "$(dirname -- "$0")" && pwd)
 [ -f "$script_dir/sunshine-client.service" ] && [ ! -L "$script_dir/sunshine-client.service" ]

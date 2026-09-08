@@ -10,8 +10,13 @@ source_dir=$(CDPATH= cd -- "$(dirname -- "$0")" && pwd)
 state='/Library/Application Support/sunshine-client'
 plist='/Library/LaunchDaemons/org.sarmg.sunshine-client.plist'
 binary='/usr/local/libexec/sunshine-client'
+[ "$(uname -m)" = arm64 ] || { echo 'Apple Silicon required.' >&2; exit 8; }
 for path in "$state" "$plist" "$binary" /usr/local/bin/sunshine-client /var/log/sunshine-client.log /etc/newsyslog.d/sunshine-client.conf; do
-  [ ! -e "$path" ] && [ ! -L "$path" ] || { echo 'Existing installation/state requires reviewed migration.' >&2; exit 5; }
+  if [ -e "$path" ] || [ -L "$path" ]; then
+    helper="$source_dir/repair-existing.sh"
+    [ -f "$helper" ] || helper="$source_dir/../repair-existing.sh"
+    exec bash "$helper" "$1" "$source_dir"
+  fi
 done
 if dscl . -read /Users/_sunshineclient >/dev/null 2>&1 || dscl . -read /Groups/_sunshineclient >/dev/null 2>&1; then
   echo 'Existing service account requires review; no account is modified.' >&2; exit 5

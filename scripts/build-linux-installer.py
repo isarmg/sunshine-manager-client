@@ -43,23 +43,45 @@ Description: Sunshine management client
         scripts = {
             'preinst': '''#!/bin/sh
 set -eu
-if [ "$1" = upgrade ]; then echo 'Cross-version upgrades are not supported.' >&2; exit 1; fi
-if [ "$1" = install ] && { [ -e /opt/sunshine-client ] || [ -e /var/lib/sunshine-client ] || [ -e /etc/systemd/system/sunshine-client.service ]; }; then
- echo 'Existing installation/state is preserved; refusing overwrite.' >&2; exit 1
+for path in /opt/sunshine-client /var/lib/sunshine-client /etc/systemd/system/sunshine-client.service /usr/lib/systemd/system/sunshine-client.service; do
+ [ ! -L "$path" ] || { echo "Redirected package path: $path" >&2; exit 8; }
+done
+if [ -f /etc/systemd/system/sunshine-client.service ]; then
+ grep -Fqx 'ExecStart=/opt/sunshine-client/sunshine-client run --state /var/lib/sunshine-client' /etc/systemd/system/sunshine-client.service || exit 8
 fi
 ''',
             'postinst': '''#!/bin/sh
 set -eu
 if [ "$1" = configure ]; then
- if ! getent passwd sunshine-client >/dev/null; then useradd --system --no-create-home --home-dir /var/lib/sunshine-client --shell /usr/sbin/nologin sunshine-client; fi
+ if ! getent passwd sunshine-client >/dev/null; then useradd --system --user-group --no-create-home --home-dir /var/lib/sunshine-client --shell /usr/sbin/nologin sunshine-client; fi
+ entry=$(getent passwd sunshine-client)
+ [ "$(printf '%s' "$entry" | cut -d: -f3)" != 0 ] || exit 8
+ [ "$(printf '%s' "$entry" | cut -d: -f6)" = /var/lib/sunshine-client ] || exit 8
+ [ "$(printf '%s' "$entry" | cut -d: -f7)" = /usr/sbin/nologin ] || exit 8
+ if [ ! -e /var/lib/sunshine-client ]; then install -d -m 0700 -o sunshine-client -g sunshine-client /var/lib/sunshine-client; fi
+ [ ! -L /var/lib/sunshine-client ] && [ -d /var/lib/sunshine-client ] || exit 8
+ [ "$(stat -c %u /var/lib/sunshine-client)" = "$(id -u sunshine-client)" ] || exit 8
+ if [ -f /etc/systemd/system/sunshine-client.service ]; then
+  grep -Fqx 'ExecStart=/opt/sunshine-client/sunshine-client run --state /var/lib/sunshine-client' /etc/systemd/system/sunshine-client.service || exit 8
+  rm /etc/systemd/system/sunshine-client.service
+ fi
  systemctl daemon-reload
- install -d -m 0700 -o sunshine-client -g sunshine-client /var/lib/sunshine-client
+ if [ -f /run/sunshine-client-package-was-active ] && [ ! -L /run/sunshine-client-package-was-active ]; then
+  systemctl start sunshine-client.service
+  rm /run/sunshine-client-package-was-active
+ fi
  echo 'Pair: sudo sunshine-client pair --interactive; then sudo sunshine-client service enable --now'
 fi
 ''',
             'prerm': '''#!/bin/sh
 set -eu
-if [ "$1" = remove ]; then systemctl disable --now sunshine-client.service; fi
+if [ "$1" = upgrade ]; then
+ if systemctl is-active --quiet sunshine-client.service; then
+  [ ! -e /run/sunshine-client-package-was-active ] && [ ! -L /run/sunshine-client-package-was-active ] || exit 8
+  (umask 077; set -C; : > /run/sunshine-client-package-was-active)
+ fi
+ systemctl stop sunshine-client.service
+elif [ "$1" = remove ]; then systemctl disable --now sunshine-client.service; fi
 ''',
             'postrm': '''#!/bin/sh
 set -eu

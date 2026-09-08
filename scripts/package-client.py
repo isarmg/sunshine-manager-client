@@ -15,7 +15,7 @@ import tomllib
 import zipfile
 
 ROOT = Path(__file__).resolve().parents[1]
-COMMON_FILES = {"LICENSE-APACHE": "LICENSE", "README.md": "README.md", "deploy/bootstrap.example.json": "bootstrap.example.json"}
+COMMON_FILES = {"LICENSE-APACHE": "LICENSE", "README.md": "README.md", "docs/platform-setup.md": "platform-setup.md", "deploy/bootstrap.example.json": "bootstrap.example.json"}
 
 
 def run(*args, **kwargs):
@@ -78,7 +78,7 @@ def main():
         shutil.copy2(binary, stage / executable)
         for source, destination in COMMON_FILES.items():
             shutil.copy2(ROOT / source, stage / destination)
-        for item in (["install-windows.ps1", "uninstall-windows.ps1"] if windows else ["macos/install-macos.sh", "macos/uninstall-macos.sh", "macos/org.sarmg.sunshine-client.plist"] if macos else ["install-linux.sh", "uninstall-linux.sh", "sunshine-client.service"]):
+        for item in (["install-windows.ps1", "uninstall-windows.ps1"] if windows else ["repair-existing.sh", "macos/install-macos.sh", "macos/uninstall-macos.sh", "macos/org.sarmg.sunshine-client.plist"] if macos else ["repair-existing.sh", "install-linux.sh", "uninstall-linux.sh", "sunshine-client.service"]):
             shutil.copy2(ROOT / "deploy" / item, stage / Path(item).name)
         manifest = {"product": "sunshine-client", "version": version, "source_commit": sha, "target": target,
                     "protocol": "sunshine-management/1", "authenticode_signed": False, "native_acceptance": "required", "notarized": False,

@@ -47,8 +47,8 @@ def verify(archive, destination, sha):
     checksum = archive.with_name(archive.name + ".sha256").read_text().strip()
     if checksum != f"{digest(archive)}  {archive.name}":
         raise ValueError("archive digest mismatch")
-    allowed = {"sunshine-client.exe" if windows else "sunshine-client", "README.md", "LICENSE", "manifest.json", "SHA256SUMS", "bootstrap.example.json"}
-    allowed.update(["install-windows.ps1", "uninstall-windows.ps1"] if windows else ["install-macos.sh", "uninstall-macos.sh", "org.sarmg.sunshine-client.plist"] if macos else ["install-linux.sh", "uninstall-linux.sh", "sunshine-client.service"])
+    allowed = {"sunshine-client.exe" if windows else "sunshine-client", "README.md", "platform-setup.md", "LICENSE", "manifest.json", "SHA256SUMS", "bootstrap.example.json"}
+    allowed.update(["install-windows.ps1", "uninstall-windows.ps1"] if windows else ["repair-existing.sh", "install-macos.sh", "uninstall-macos.sh", "org.sarmg.sunshine-client.plist"] if macos else ["repair-existing.sh", "install-linux.sh", "uninstall-linux.sh", "sunshine-client.service"])
     root = destination / name
     root.mkdir()
     seen = set()
@@ -150,8 +150,11 @@ foreach($path in @('{escaped}', '{escaped}\\bootstrap.json')) {{
 
         else:
             subprocess.run(install, check=True, env=powershell_environment())
-        if subprocess.run(install, stdout=subprocess.DEVNULL, stderr=subprocess.DEVNULL, env=powershell_environment()).returncode == 0:
-            raise ValueError("installer overwrote an existing installation")
+        state_file = Path(os.environ['ProgramData']) / 'SunshineClient/provisioning/state.sqlite3'
+        before = state_file.read_bytes()
+        subprocess.run(install, check=True, env=powershell_environment())
+        if state_file.read_bytes() != before:
+            raise ValueError("repair changed existing protected state")
 
         if seed:
             exercise_native_service(Path(os.environ['ProgramFiles']) / 'SunshineClient/sunshine-client.exe', seed, Path(os.environ['ProgramData']) / 'SunshineClient')
@@ -172,8 +175,13 @@ foreach($path in @('{escaped}', '{escaped}\\bootstrap.json')) {{
             subprocess.run(['chown', '-R', 'sunshine-client:sunshine-client', '/var/lib/sunshine-client'], check=True)
         else:
             subprocess.run(install, check=True)
-        if subprocess.run(install, stdout=subprocess.DEVNULL, stderr=subprocess.DEVNULL).returncode == 0:
-            raise ValueError("installer overwrote an existing installation")
+        state_file = Path('/var/lib/sunshine-client/provisioning/bootstrap.json')
+        before = state_file.read_bytes()
+        subprocess.run(install, check=True)
+        if installer:
+            subprocess.run(['dpkg', '--install', str(installer)], check=True)
+        if state_file.read_bytes() != before:
+            raise ValueError("repair changed existing protected state")
         if subprocess.run(["systemctl", "is-active", "--quiet", "sunshine-client.service"]).returncode == 0:
             raise ValueError("unpaired service was started by installer")
         if subprocess.run(["systemctl", "is-enabled", "--quiet", "sunshine-client.service"]).returncode == 0:
@@ -192,7 +200,7 @@ foreach($path in @('{escaped}', '{escaped}\\bootstrap.json')) {{
             subprocess.run(["bash", str(root / "uninstall-linux.sh")], check=True)
         if not (state / "bootstrap.json").is_file():
             raise ValueError("uninstall removed protected state")
-    print("Native offline install, explicit-start policy, overwrite refusal and state-preserving uninstall passed; online service behavior requires enrolled-device acceptance.")
+    print("Native offline install, explicit-start policy, program replacement and state-preserving uninstall passed; online service behavior requires enrolled-device acceptance.")
 
 
 def exercise_native_service(binary, seed, state, service_user=None):

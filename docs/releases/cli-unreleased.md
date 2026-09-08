@@ -1,3 +1,5 @@
+> 这是 0.1.0-rc.5 的历史验收记录。当前覆盖安装行为和操作步骤见 [0.1.0-rc.6](0.1.0-rc.6.md) 与 [平台指南](../platform-setup.md)。
+
 # 纯命令行改造（v0.1.0-rc.5 预发布）
 
 当前支持 Windows x64、Linux x64、macOS Apple Silicon。Intel macOS 已从适配、CI 和发行范围移除；下文早期验证记录仅供追溯。
