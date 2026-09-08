@@ -60,3 +60,5 @@ python3 -m unittest discover -s scripts/tests -p 'test_*.py'
 ```
 
 Linux DEB 面向 Ubuntu 24.04 amd64；Windows MSI 保留 WiX 构建工具。`sunshine-client-setup` 仅薄包装转交 CLI。macOS 候选脚本位于 `deploy/macos`，只安装 Client 的低权限系统 LaunchDaemon。默认卸载保留凭据和执行日志，并在 Manager 退役设备。
+
+原生验收范围与精确基线见 [CLI 兼容矩阵](docs/releases/cli-compatibility.md) 和 [验证记录](docs/releases/cli-unreleased.md)。

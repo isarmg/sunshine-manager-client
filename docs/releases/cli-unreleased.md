@@ -21,15 +21,16 @@
 
 配置修订与生效修订分别展示。Linux/macOS 的只读 Unix socket 使用受保护目录、对端身份、固定请求、版本与大小限制，绑定进程世代及身份；旧绑定摘要不能作为新绑定事实。无法获得运行事实时明确返回 unavailable/unknown。`status --check` 不会把未证实的健康状态当作成功。
 
-## 发布限制
+## 原生验证与发行边界
 
-这是可审阅的开发改造，**尚不能认定更新手册全部验收完成**：
+[四个平台的原生服务及安装包 CI 已通过](https://github.com/isarmg/sunshine-manager-client/actions/runs/34193661720)，源码提交 `6127a9d55c0125cca1bc0bc3c32344466a8b64ec`：Windows、Linux、macOS Intel 与 Apple Silicon。验收使用一次性 runner 的合成离线身份，覆盖安装后停止、显式启动与启动策略、真实只读 IPC、运行中维护冲突、管理员凭据更新、服务账户访问、停止后不错误重启，以及卸载保留身份和执行日志。
 
-- Windows 已加入受管理员/服务 ACL 保护的只读命名管道、对端进程与服务镜像验证及有界读写；尚待 Windows 原生压力与对抗验收。
-- Windows 日志读取使用 SCM 生命周期事件，macOS 读取服务文件日志；跟随按日志游标去重，Windows/macOS 路径仍待原生验收。macOS 的 `--since` 接受 UTC ISO 日期/时间，无法给无时间戳的旧文本行补造时间。
-- 尚未完成 Windows/macOS 原生安装、无人登录启动、SCM/launchd 策略、服务账户证书信任、故障回滚和真实 Sunshine 联调验收。
-- macOS 安装脚本/CI 是候选实现，没有签名、公证或已通过原生验收的发行承诺。
-- 现有产品原本拒绝跨版本覆盖；本次没有伪造升级路径。MSI 已加入仅针对已知托盘文件、快捷方式和 Run 登记的清理项；跨版本升级/回滚矩阵仍需要在 `sarmg-upgrade` 中完成并验收。卸载默认保留状态。
-- Sunshine macOS 协议已发布到 Server 的 `codex/client-cli-completion-20260907` 验证分支，Client 固定依赖提交 `d4b98b06a00d185bd845a4bd3e3df8c939807864`。正式部署仍须先更新匹配的 Server；不能直接发布给不识别新枚举的旧 Server。
+Mac 归档已加入源提交、清单、校验和及实际可执行文件身份的独立验证。Windows 使用 MSVC/MSI，Linux 使用 Ubuntu 24.04 的 DEB；归档仍为未签名的验证产物。签名、公证、主分支与正式发行不在本次验证分支授权内。
 
-这些限制不能仅靠 Linux 上交叉编译消除，不能把本文件当作发行批准或实机通过记录。
+协议固定为 Server 的真实提交 `d4b98b06a00d185bd845a4bd3e3df8c939807864`，已删除临时 vendor；[Server 完整 CI](https://github.com/isarmg/sunshine-manager-server/actions/runs/34192112410) 已通过。生产环境仍须先部署匹配的 Server，再发布 macOS Client。
+
+版本与升级/回退边界见 [兼容矩阵](cli-compatibility.md)。不存在自动历史迁移、跨平台状态复制或自动降级能力；不能通过删除日志或重新配对绕过安装器的覆盖拒绝。
+
+Windows 11 上已用本次原生 CLI 对隔离的真实 Sunshine 实例执行 `doctor --sunshine`：未信任证书时退出码为 6；在当前用户证书存储临时信任测试 CA 后，认证读取成功。前后哈希证明 Client SQLite 状态与 Sunshine 配置未变；结束后已核实临时 CA 和隔离进程均被清理。此项未操作已有生产 Sunshine 服务，只证明当前用户的 TLS 信任环境，不代表后台服务账户的信任环境，也未验证真实受控写入与重启闭环。
+
+用户确认目前只有 Windows Sunshine 主机，暂无 Linux/macOS Sunshine 实机。CI 的离线服务验收不等于这两平台的真实 Sunshine 联调，也不等于物理重启后无人登录验收。
