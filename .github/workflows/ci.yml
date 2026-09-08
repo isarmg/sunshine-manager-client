@@ -138,6 +138,18 @@ jobs:
           sudo sh deploy/macos/uninstall-macos.sh
           sudo test -f "/Library/Application Support/sunshine-client/provisioning/identity.json"
           sudo test -d "/Library/Application Support/sunshine-client/journal"
+      - name: Package and independently verify the native Mac archive
+        run: |
+          python3 scripts/package-client.py --output "$RUNNER_TEMP/client-output"
+          archives=("$RUNNER_TEMP"/client-output/*.tar.gz)
+          test "${#archives[@]}" = 1
+          python3 scripts/check-client-package.py --archive "${archives[0]}" --sha "$GITHUB_SHA"
+      - name: Retain verified native Mac archive
+        uses: actions/upload-artifact@043fb46d1a93c77aae656e7c1c64a875d1fc6a0a # v7.0.1
+        with:
+          name: sunshine-client-macos-arm64
+          path: ${{ runner.temp }}/client-output/*
+          if-no-files-found: error
 
   client-macos-x64:
     permissions:
@@ -169,3 +181,15 @@ jobs:
           sudo sh deploy/macos/uninstall-macos.sh
           sudo test -f "/Library/Application Support/sunshine-client/provisioning/identity.json"
           sudo test -d "/Library/Application Support/sunshine-client/journal"
+      - name: Package and independently verify the native Mac archive
+        run: |
+          python3 scripts/package-client.py --output "$RUNNER_TEMP/client-output"
+          archives=("$RUNNER_TEMP"/client-output/*.tar.gz)
+          test "${#archives[@]}" = 1
+          python3 scripts/check-client-package.py --archive "${archives[0]}" --sha "$GITHUB_SHA"
+      - name: Retain verified native Mac archive
+        uses: actions/upload-artifact@043fb46d1a93c77aae656e7c1c64a875d1fc6a0a # v7.0.1
+        with:
+          name: sunshine-client-macos-x64
+          path: ${{ runner.temp }}/client-output/*
+          if-no-files-found: error

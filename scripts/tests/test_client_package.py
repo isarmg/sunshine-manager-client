@@ -36,11 +36,11 @@ class PackageTests(unittest.TestCase):
         directory.iterdir.return_value = [PureWindowsPath(name) for name in ['bootstrap.example.json', 'README.md', 'LICENSE']]
         self.assertEqual([p.name for p in builder.package_files(directory)], ['LICENSE', 'README.md', 'bootstrap.example.json'])
 
-    def fixture(self, temporary, windows=False, extra=None, wrong_sha=False):
-        target = "x86_64-pc-windows-msvc" if windows else "x86_64-unknown-linux-gnu"
+    def fixture(self, temporary, windows=False, extra=None, wrong_sha=False, mac_target=None):
+        target = mac_target or ("x86_64-pc-windows-msvc" if windows else "x86_64-unknown-linux-gnu")
         name = f"sunshine-client-{VERSION}-{target}"
         names = ["sunshine-client.exe" if windows else "sunshine-client", "README.md", "LICENSE", "bootstrap.example.json"]
-        names += ["install-windows.ps1", "uninstall-windows.ps1"] if windows else ["install-linux.sh", "uninstall-linux.sh", "sunshine-client.service"]
+        names += ["install-windows.ps1", "uninstall-windows.ps1"] if windows else ["install-macos.sh", "uninstall-macos.sh", "org.sarmg.sunshine-client.plist"] if mac_target else ["install-linux.sh", "uninstall-linux.sh", "sunshine-client.service"]
         files = {n: b"fixture" for n in names}
         hashes = {n: hashlib.sha256(b).hexdigest() for n, b in files.items()}
         manifest = {"product": "sunshine-client", "version": VERSION, "source_commit": "b" * 40 if wrong_sha else SHA, "target": target, "protocol": "sunshine-management/1", "authenticode_signed": False, "files": hashes}
@@ -68,6 +68,14 @@ class PackageTests(unittest.TestCase):
             with self.subTest(windows=windows), tempfile.TemporaryDirectory() as tmp:
                 root = Path(tmp)
                 archive = self.fixture(root, windows=windows)
+                with patch.object(checker, "run", return_value=f"sunshine-client {VERSION} (git {SHA}; sunshine-management/1)"):
+                    checker.verify(archive, root, SHA)
+
+    def test_macos_archives_keep_their_actual_architecture(self):
+        for target in ["x86_64-apple-darwin", "aarch64-apple-darwin"]:
+            with self.subTest(target=target), tempfile.TemporaryDirectory() as tmp:
+                root = Path(tmp)
+                archive = self.fixture(root, mac_target=target)
                 with patch.object(checker, "run", return_value=f"sunshine-client {VERSION} (git {SHA}; sunshine-management/1)"):
                     checker.verify(archive, root, SHA)
 

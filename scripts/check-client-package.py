@@ -37,13 +37,18 @@ def verify(archive, destination, sha):
     windows = archive.suffix == ".zip"
     suffix = ".zip" if windows else ".tar.gz"
     name = archive.name.removesuffix(suffix)
-    if not re.fullmatch(r"sunshine-client-[0-9]+\.[0-9]+\.[0-9]+(?:-rc\.[0-9]+)?-x86_64-(?:pc-windows-msvc|unknown-linux-gnu)", name):
+    match = re.fullmatch(r"sunshine-client-[0-9]+\.[0-9]+\.[0-9]+(?:-rc\.[0-9]+)?-(?P<target>x86_64-pc-windows-msvc|x86_64-unknown-linux-gnu|(?:x86_64|aarch64)-apple-darwin)", name)
+    if match is None:
         raise ValueError("unexpected archive name")
+    target = match["target"]
+    macos = target.endswith("-apple-darwin")
+    if windows != (target == "x86_64-pc-windows-msvc"):
+        raise ValueError("archive format does not match target")
     checksum = archive.with_name(archive.name + ".sha256").read_text().strip()
     if checksum != f"{digest(archive)}  {archive.name}":
         raise ValueError("archive digest mismatch")
     allowed = {"sunshine-client.exe" if windows else "sunshine-client", "README.md", "LICENSE", "manifest.json", "SHA256SUMS", "bootstrap.example.json"}
-    allowed.update(["install-windows.ps1", "uninstall-windows.ps1"] if windows else ["install-linux.sh", "uninstall-linux.sh", "sunshine-client.service"])
+    allowed.update(["install-windows.ps1", "uninstall-windows.ps1"] if windows else ["install-macos.sh", "uninstall-macos.sh", "org.sarmg.sunshine-client.plist"] if macos else ["install-linux.sh", "uninstall-linux.sh", "sunshine-client.service"])
     root = destination / name
     root.mkdir()
     seen = set()
@@ -83,7 +88,6 @@ def verify(archive, destination, sha):
     if seen != allowed:
         raise ValueError("incomplete package")
     manifest = json.loads((root / "manifest.json").read_text())
-    target = "x86_64-pc-windows-msvc" if windows else "x86_64-unknown-linux-gnu"
     if manifest["source_commit"] != sha or manifest["target"] != target or manifest["protocol"] != "sunshine-management/1" or manifest["product"] != "sunshine-client":
         raise ValueError("package identity mismatch")
     if name != f"sunshine-client-{manifest['version']}-{target}" or manifest["authenticode_signed"] is not False:
