@@ -42,9 +42,9 @@ jobs:
         run: |
           test "$GITHUB_ACTIONS" = true
           test "$RUNNER_ENVIRONMENT" = github-hosted
-          # Hosted images ship /opt mode 0777. Production repair correctly
-          # refuses writable ancestors; normalize this disposable fixture only.
-          sudo chmod go-w /opt
+          # Hosted images make tool directories writable. Production repair
+          # refuses writable ancestors; normalize these disposable fixtures only.
+          sudo chmod go-w /opt /usr/local /usr/local/bin
       - name: Verify extracted package and actual systemd install lifecycle
         run: |
           mapfile -t archives < <(find "$RUNNER_TEMP/client-output" -maxdepth 1 -type f -name '*.tar.gz')
