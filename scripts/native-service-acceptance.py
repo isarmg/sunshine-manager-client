@@ -26,7 +26,7 @@ def exercise(binary, seed, state, service_user=None):
     def cli(*args, expected=0, input=None):
         result = execute([binary, *args, "--state", state, "--format", "json", "--timeout", "30s", "--non-interactive"], input=input)
         if result.returncode != expected:
-            raise RuntimeError(f"{args[:2]} returned {result.returncode}, expected {expected}")
+            raise RuntimeError(f"{args[:2]} returned {result.returncode}, expected {expected}; CLI response: {result.stdout[:4096]}")
         value = json.loads(result.stdout)
         return value["result"] if expected == 0 else value
 

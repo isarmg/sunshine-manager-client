@@ -271,7 +271,7 @@ fn private_file(path: &Path, create: bool, exclusive: bool) -> Result<File, Stor
                 std::ptr::null_mut(),
             );
             if raw == INVALID_HANDLE_VALUE {
-                return Err(storage_error(()));
+                return Err(storage_error(std::io::Error::last_os_error()));
             }
             File::from_raw_handle(raw)
         }
