@@ -27,13 +27,13 @@ pub struct DirectoryGuard {
 pub struct ProtectedState {
     connection: rusqlite::Connection,
     _database: File,
-    _lock: File,
+    _lock: Option<File>,
     _directory: DirectoryGuard,
 }
 fn wide(value: &OsStr) -> Result<Vec<u16>, StorageError> {
     let mut bytes: Vec<u16> = value.encode_wide().collect();
     if bytes.contains(&0) {
-        return Err(StorageError);
+        return Err(StorageError::Unsafe);
     }
     bytes.push(0);
     Ok(bytes)
@@ -50,14 +50,14 @@ fn sid_text(sid: PSID) -> Result<String, StorageError> {
     unsafe {
         let mut output = std::ptr::null_mut();
         if ConvertSidToStringSidW(sid, &mut output) == 0 {
-            return Err(StorageError);
+            return Err(StorageError::Unsafe);
         }
         let _owned = LocalAllocation(output.cast());
         let mut len = 0;
         while *output.add(len) != 0 {
             len += 1;
             if len > 256 {
-                return Err(StorageError);
+                return Err(StorageError::Unsafe);
             }
         }
         String::from_utf16(std::slice::from_raw_parts(output, len)).map_err(storage_error)
@@ -67,7 +67,7 @@ fn current_sid() -> Result<String, StorageError> {
     unsafe {
         let mut raw = std::ptr::null_mut();
         if OpenProcessToken(GetCurrentProcess(), TOKEN_QUERY, &mut raw) == 0 {
-            return Err(StorageError);
+            return Err(StorageError::Unsafe);
         }
         let token = File::from_raw_handle(raw);
         let mut needed = 0;
@@ -79,7 +79,7 @@ fn current_sid() -> Result<String, StorageError> {
             &mut needed,
         );
         if needed == 0 || needed > 16384 {
-            return Err(StorageError);
+            return Err(StorageError::Unsafe);
         }
         // u64 storage supplies native alignment for TOKEN_USER.
         let mut buffer = vec![0u64; (needed as usize).div_ceil(8)];
@@ -91,7 +91,7 @@ fn current_sid() -> Result<String, StorageError> {
             &mut needed,
         ) == 0
         {
-            return Err(StorageError);
+            return Err(StorageError::Unsafe);
         }
         sid_text((*(buffer.as_ptr().cast::<TOKEN_USER>())).User.Sid)
     }
@@ -116,32 +116,32 @@ fn verify_private(file: &File) -> Result<(), StorageError> {
             &mut descriptor,
         ) != 0
         {
-            return Err(StorageError);
+            return Err(StorageError::Unsafe);
         }
         let _owned = LocalAllocation(descriptor);
         if owner.is_null() || acl.is_null() || !trusted(&sid_text(owner)?, &current) {
-            return Err(StorageError);
+            return Err(StorageError::Unsafe);
         }
         if (*acl).AceCount == 0 {
-            return Err(StorageError);
+            return Err(StorageError::Unsafe);
         }
         for index in 0..(*acl).AceCount {
             let mut ace = std::ptr::null_mut();
             if GetAce(acl, index.into(), &mut ace) == 0 {
-                return Err(StorageError);
+                return Err(StorageError::Unsafe);
             }
             let header = &*ace.cast::<ACE_HEADER>();
             // Only simple allow ACEs for the service identity, SYSTEM and Administrators.
             // Unknown/object/callback ACEs fail closed; inheritance-only ACEs are checked too.
             if header.AceType != 0 {
-                return Err(StorageError);
+                return Err(StorageError::Unsafe);
             }
             let allow = &*ace.cast::<ACCESS_ALLOWED_ACE>();
             if !trusted(
                 &sid_text(std::ptr::addr_of!(allow.SidStart).cast_mut().cast())?,
                 &current,
             ) {
-                return Err(StorageError);
+                return Err(StorageError::Unsafe);
             }
         }
     }
@@ -155,7 +155,7 @@ fn verify_kind(file: &File, directory: bool) -> Result<(), StorageError> {
             || (info.dwFileAttributes & FILE_ATTRIBUTE_DIRECTORY != 0) != directory
             || (!directory && info.nNumberOfLinks != 1)
         {
-            return Err(StorageError);
+            return Err(StorageError::Unsafe);
         }
     }
     Ok(())
@@ -171,16 +171,19 @@ fn directory_handle(path: &Path) -> Result<File, StorageError> {
     Ok(file)
 }
 pub fn prepare_root(path: &Path) -> Result<DirectoryGuard, StorageError> {
+    open_root(path, true)
+}
+fn open_root(path: &Path, create: bool) -> Result<DirectoryGuard, StorageError> {
     // Local absolute DOS drive paths only: no UNC shares, device namespaces, ADS or traversal.
     let mut components = path.components();
     if !matches!(components.next(),Some(Component::Prefix(p)) if matches!(p.kind(),Prefix::Disk(_)))
         || !matches!(components.next(), Some(Component::RootDir))
     {
-        return Err(StorageError);
+        return Err(StorageError::Unsafe);
     }
     let parts: Vec<_> = components.collect();
-    if parts.is_empty()||parts.iter().any(|c|!matches!(c,Component::Normal(n) if !n.to_string_lossy().contains([':', '*', '?'])&&!n.to_string_lossy().ends_with(['.',' ']))) {return Err(StorageError);}
-    let parent = path.parent().ok_or(StorageError)?;
+    if parts.is_empty()||parts.iter().any(|c|!matches!(c,Component::Normal(n) if !n.to_string_lossy().contains([':', '*', '?'])&&!n.to_string_lossy().ends_with(['.',' ']))) {return Err(StorageError::Unsafe);}
+    let parent = path.parent().ok_or(StorageError::Unsafe)?;
     let mut ancestors = Vec::new();
     let mut cursor = PathBuf::new();
     for part in parent.components() {
@@ -190,10 +193,7 @@ pub fn prepare_root(path: &Path) -> Result<DirectoryGuard, StorageError> {
         }
         ancestors.push(directory_handle(&cursor)?);
     }
-    let current = current_sid()?;
-    let sddl = wide(OsStr::new(&format!(
-        "D:P(A;OICI;FA;;;SY)(A;OICI;FA;;;BA)(A;OICI;FA;;;{current})"
-    )))?;
+    let sddl = wide(OsStr::new("O:BAG:BAD:P(A;OICI;FA;;;SY)(A;OICI;FA;;;BA)"))?;
     unsafe {
         let mut descriptor = std::ptr::null_mut();
         if ConvertStringSecurityDescriptorToSecurityDescriptorW(
@@ -203,7 +203,7 @@ pub fn prepare_root(path: &Path) -> Result<DirectoryGuard, StorageError> {
             std::ptr::null_mut(),
         ) == 0
         {
-            return Err(StorageError);
+            return Err(StorageError::Unsafe);
         }
         let _owned = LocalAllocation(descriptor);
         let attributes = SECURITY_ATTRIBUTES {
@@ -211,10 +211,11 @@ pub fn prepare_root(path: &Path) -> Result<DirectoryGuard, StorageError> {
             lpSecurityDescriptor: descriptor,
             bInheritHandle: 0,
         };
-        if CreateDirectoryW(wide(path.as_os_str())?.as_ptr(), &attributes) == 0
+        if create
+            && CreateDirectoryW(wide(path.as_os_str())?.as_ptr(), &attributes) == 0
             && GetLastError() != ERROR_ALREADY_EXISTS
         {
-            return Err(StorageError);
+            return Err(StorageError::Unsafe);
         }
     }
     let leaf = directory_handle(path)?;
@@ -237,7 +238,46 @@ fn private_file(path: &Path, create: bool, exclusive: bool) -> Result<File, Stor
             FILE_SHARE_READ | FILE_SHARE_WRITE
         })
         .custom_flags(FILE_FLAG_OPEN_REPARSE_POINT);
-    let file = options.open(path).map_err(storage_error)?;
+    let file = if create {
+        unsafe {
+            let mut descriptor = std::ptr::null_mut();
+            let sddl = wide(OsStr::new("O:BAG:BAD:P(A;;FA;;;SY)(A;;FA;;;BA)"))?;
+            if ConvertStringSecurityDescriptorToSecurityDescriptorW(
+                sddl.as_ptr(),
+                1,
+                &mut descriptor,
+                std::ptr::null_mut(),
+            ) == 0
+            {
+                return Err(storage_error(()));
+            }
+            let _owned = LocalAllocation(descriptor);
+            let attributes = SECURITY_ATTRIBUTES {
+                nLength: std::mem::size_of::<SECURITY_ATTRIBUTES>() as u32,
+                lpSecurityDescriptor: descriptor,
+                bInheritHandle: 0,
+            };
+            let raw = CreateFileW(
+                wide(path.as_os_str())?.as_ptr(),
+                GENERIC_READ | GENERIC_WRITE,
+                if exclusive {
+                    0
+                } else {
+                    FILE_SHARE_READ | FILE_SHARE_WRITE
+                },
+                &attributes,
+                OPEN_ALWAYS,
+                FILE_FLAG_OPEN_REPARSE_POINT,
+                std::ptr::null_mut(),
+            );
+            if raw == INVALID_HANDLE_VALUE {
+                return Err(storage_error(()));
+            }
+            File::from_raw_handle(raw)
+        }
+    } else {
+        options.open(path).map_err(storage_error)?
+    };
     verify_kind(&file, false)?;
     verify_private(&file)?;
     Ok(file)
@@ -262,7 +302,7 @@ impl ProtectedState {
             .iter()
             .any(|n| name == *n)
             {
-                return Err(StorageError);
+                return Err(StorageError::Unsafe);
             }
             private_file(&entry.path(), false, false)?;
         }
@@ -274,12 +314,30 @@ impl ProtectedState {
             .query_row("PRAGMA quick_check", [], |r| r.get(0))
             .map_err(storage_error)?;
         if integrity != "ok" {
-            return Err(StorageError);
+            return Err(StorageError::Unsafe);
         }
         Ok(Self {
             connection,
             _database: database,
-            _lock: lock,
+            _lock: Some(lock),
+            _directory: directory,
+        })
+    }
+    pub fn open_readonly(path: &Path) -> Result<Self, StorageError> {
+        if !path.is_dir() {
+            return Err(StorageError::Unsafe);
+        }
+        let directory = open_root(path, false)?;
+        let database = private_file(&directory.path.join("state.sqlite3"), false, false)?;
+        let connection = rusqlite::Connection::open_with_flags(
+            directory.path.join("state.sqlite3"),
+            rusqlite::OpenFlags::SQLITE_OPEN_READ_ONLY,
+        )
+        .map_err(storage_error)?;
+        Ok(Self {
+            connection,
+            _database: database,
+            _lock: None,
             _directory: directory,
         })
     }
@@ -295,7 +353,7 @@ impl ProtectedState {
             .optional()
             .map_err(storage_error)?;
         if length.is_some_and(|n| n > 2 * 1024 * 1024) {
-            return Err(StorageError);
+            return Err(StorageError::Unsafe);
         }
         self.connection
             .query_row("SELECT value FROM facts WHERE name=?", [name], |r| r.get(0))
@@ -314,33 +372,36 @@ impl ProtectedState {
             .map_err(storage_error)
     }
     pub fn put(&self, name: &str, bytes: &[u8]) -> Result<(), StorageError> {
+        if self._lock.is_none() {
+            return Err(StorageError::Unsafe);
+        }
         validate_name(name)?;
         if bytes.len() > 2 * 1024 * 1024 {
-            return Err(StorageError);
+            return Err(StorageError::Unsafe);
         }
         self.connection.execute("INSERT INTO facts(name,value) VALUES(?,?) ON CONFLICT(name) DO UPDATE SET value=excluded.value",rusqlite::params![name,bytes]).map_err(storage_error)?;
         Ok(())
     }
     pub fn import_bootstrap(&self, path: &Path) -> Result<(), StorageError> {
         // Hold every ancestor and verify the existing input directory (never create missing input).
-        if !path.parent().ok_or(StorageError)?.is_dir() {
-            return Err(StorageError);
+        if !path.parent().ok_or(StorageError::Unsafe)?.is_dir() {
+            return Err(StorageError::Unsafe);
         }
-        let _directory = prepare_root(path.parent().ok_or(StorageError)?)?;
+        let _directory = open_root(path.parent().ok_or(StorageError::Unsafe)?, false)?;
         let file = private_file(path, false, false)?;
         let mut bytes = zeroize::Zeroizing::new(Vec::new());
         file.take(2 * 1024 * 1024 + 1)
             .read_to_end(&mut bytes)
             .map_err(storage_error)?;
         if bytes.len() > 2 * 1024 * 1024 {
-            return Err(StorageError);
+            return Err(StorageError::Unsafe);
         }
         if let Some(identity) = self.read("identity.json")? {
             return if crate::provisioning::pending_retry(&bytes, &zeroize::Zeroizing::new(identity))
             {
                 Ok(())
             } else {
-                Err(StorageError)
+                Err(StorageError::Unsafe)
             };
         }
         crate::provisioning::validate_bootstrap(&bytes).map_err(storage_error)?;
@@ -354,8 +415,24 @@ fn validate_name(name: &str) -> Result<(), StorageError> {
             .bytes()
             .all(|b| b.is_ascii_alphanumeric() || b"-_.".contains(&b))
     {
-        Err(StorageError)
+        Err(StorageError::Unsafe)
     } else {
         Ok(())
     }
+}
+
+pub fn read_input(path: &Path) -> Result<zeroize::Zeroizing<Vec<u8>>, StorageError> {
+    if !path.parent().ok_or(StorageError::Unsafe)?.is_dir() {
+        return Err(StorageError::Unsafe);
+    }
+    let _directory = open_root(path.parent().ok_or(StorageError::Unsafe)?, false)?;
+    let file = private_file(path, false, false)?;
+    let mut bytes = zeroize::Zeroizing::new(Vec::new());
+    file.take(65537)
+        .read_to_end(&mut bytes)
+        .map_err(storage_error)?;
+    if bytes.len() > 65536 {
+        return Err(StorageError::Unsafe);
+    }
+    Ok(bytes)
 }

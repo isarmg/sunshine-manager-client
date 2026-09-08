@@ -3,9 +3,13 @@ fn main() {
     assert!(
         matches!(
             target.as_str(),
-            "x86_64-unknown-linux-gnu" | "x86_64-pc-windows-msvc"
+            "x86_64-unknown-linux-gnu"
+                | "x86_64-pc-windows-msvc"
+                | "x86_64-pc-windows-gnu"
+                | "x86_64-apple-darwin"
+                | "aarch64-apple-darwin"
         ),
-        "Sunshine Client supports only Linux GNU x86_64 and Windows MSVC x86_64"
+        "Sunshine Client supports Linux/Windows x86_64 and macOS x86_64/aarch64"
     );
     println!("cargo:rerun-if-env-changed=SUNSHINE_CLIENT_BUILD_SHA");
     let sha = std::env::var("SUNSHINE_CLIENT_BUILD_SHA").unwrap_or_else(|_| "development".into());

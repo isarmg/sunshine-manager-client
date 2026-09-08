@@ -99,3 +99,27 @@ impl Journal for FileJournal {
         Ok(())
     }
 }
+
+pub fn inspect(path: &Path, operation: Option<&str>) -> Result<serde_json::Value, JournalError> {
+    let store = ProtectedState::open_readonly(path).map_err(fail)?;
+    let keys = if let Some(id) = operation {
+        vec![name(id)?]
+    } else {
+        store.names().map_err(fail)?
+    };
+    let mut records = Vec::new();
+    for key in keys {
+        let id = key.strip_suffix(".json").ok_or(JournalError::Storage)?;
+        name(id)?;
+        let bytes = store
+            .read(&key)
+            .map_err(fail)?
+            .ok_or(JournalError::Storage)?;
+        let record: ExecutionRecord = serde_json::from_slice(&bytes).map_err(fail)?;
+        encode(&record)?;
+        records.push(
+            serde_json::json!({"operation_id":id,"effect":record.effect,"report":record.report}),
+        );
+    }
+    Ok(serde_json::json!({"scope":"local_execution_observation","records":records}))
+}

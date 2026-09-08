@@ -10,7 +10,6 @@ import re
 import subprocess
 import tarfile
 import tempfile
-import time
 import zipfile
 
 
@@ -102,7 +101,7 @@ def verify(archive, destination, sha):
     return root, binary
 
 
-def install_test(root, binary, temporary, installer=None):
+def install_test(root, binary, temporary, installer=None, seed=None):
     # This test intentionally creates a real service/account, but never on a user's host.
     if os.environ.get("GITHUB_ACTIONS") != "true" or os.environ.get("RUNNER_ENVIRONMENT") != "github-hosted":
         raise ValueError("--install is restricted to disposable GitHub-hosted runners")
@@ -139,30 +138,19 @@ foreach($path in @('{escaped}', '{escaped}\\bootstrap.json')) {{
         if installer:
             subprocess.run(['msiexec.exe', '/i', str(installer), '/qn', '/norestart'], check=True)
             installed = Path(os.environ['ProgramFiles']) / 'SunshineClient'
-            subprocess.run([str(installed / 'sunshine-client-tray.exe'), '--self-test'], check=True, timeout=30)
-            subprocess.run([str(installed / 'sunshine-client-tray.exe'), '--configure-file', str(bootstrap)], check=True, timeout=60)
-            if subprocess.run([str(installed / 'sunshine-client-tray.exe'), '--configure-file', str(bootstrap)], timeout=60).returncode == 0:
-                raise ValueError('pairing wizard overwrote existing identity')
-            tray = subprocess.Popen([str(installed / 'sunshine-client-tray.exe')])
-            try:
-                time.sleep(2)
-                if tray.poll() is not None:
-                    raise ValueError('tray exited unexpectedly')
-            finally:
-                if tray.poll() is None:
-                    tray.terminate()
-                tray.wait(timeout=15)
-            subprocess.run([str(installed / 'sunshine-client-tray.exe'), '--stop-service'], check=True, timeout=60)
+            if (installed / 'sunshine-client-tray.exe').exists():
+                raise ValueError('CLI installer contains a tray executable')
+            subprocess.run([str(installed / 'sunshine-client.exe'), 'init', '--state', str(Path(os.environ['ProgramData']) / 'SunshineClient'), '--bootstrap', str(bootstrap)], check=True, timeout=60)
             if powershell("(Get-Service SunshineClient).Status") != 'Stopped':
-                raise ValueError('tray exit action did not stop management service')
+                raise ValueError('unpaired service was started by installer')
+
         else:
             subprocess.run(install, check=True, env=powershell_environment())
         if subprocess.run(install, stdout=subprocess.DEVNULL, stderr=subprocess.DEVNULL, env=powershell_environment()).returncode == 0:
             raise ValueError("installer overwrote an existing installation")
-        powershell("Restart-Service SunshineClient; (Get-Service SunshineClient).WaitForStatus('Running',[TimeSpan]::FromSeconds(30))")
-        time.sleep(3)
-        if powershell("(Get-Service SunshineClient).Status") != "Running":
-            raise ValueError("Client failed to remain running while Manager was offline")
+
+        if seed:
+            exercise_native_service(Path(os.environ['ProgramFiles']) / 'SunshineClient/sunshine-client.exe', seed, Path(os.environ['ProgramData']) / 'SunshineClient')
         if installer:
             subprocess.run(['msiexec.exe', '/x', str(installer), '/qn', '/norestart'], check=True)
             if (installed / 'sunshine-client-tray.exe').exists():
@@ -178,24 +166,37 @@ foreach($path in @('{escaped}', '{escaped}\\bootstrap.json')) {{
             # Offline installation is separate from successful online pairing.
             subprocess.run([str(binary), 'init', '--state', '/var/lib/sunshine-client', '--bootstrap', str(bootstrap)], check=True)
             subprocess.run(['chown', '-R', 'sunshine-client:sunshine-client', '/var/lib/sunshine-client'], check=True)
-            subprocess.run(['systemctl', 'enable', '--now', 'sunshine-client.service'], check=True)
         else:
             subprocess.run(install, check=True)
         if subprocess.run(install, stdout=subprocess.DEVNULL, stderr=subprocess.DEVNULL).returncode == 0:
             raise ValueError("installer overwrote an existing installation")
-        subprocess.run(["systemctl", "restart", "sunshine-client.service"], check=True)
-        time.sleep(3)
-        subprocess.run(["systemctl", "is-active", "--quiet", "sunshine-client.service"], check=True)
+        if subprocess.run(["systemctl", "is-active", "--quiet", "sunshine-client.service"]).returncode == 0:
+            raise ValueError("unpaired service was started by installer")
+        if subprocess.run(["systemctl", "is-enabled", "--quiet", "sunshine-client.service"]).returncode == 0:
+            raise ValueError("installer enabled the service without administrator action")
+        pending_run = subprocess.run([str(binary), "run", "--state", "/var/lib/sunshine-client", "--format", "json"], capture_output=True, timeout=60)
+        if pending_run.returncode != 4:
+            raise ValueError("unpaired run did not return awaiting_pairing")
         state = Path("/var/lib/sunshine-client/provisioning")
         if (state.stat().st_mode & 0o077) != 0 or not (state / "bootstrap.json").is_file():
             raise ValueError("protected pending configuration missing")
+        if seed:
+            exercise_native_service(Path('/opt/sunshine-client/sunshine-client'), seed, Path('/var/lib/sunshine-client'), 'sunshine-client:sunshine-client')
         if installer:
             subprocess.run(['dpkg', '--remove', 'sunshine-client'], check=True)
         else:
             subprocess.run(["bash", str(root / "uninstall-linux.sh")], check=True)
         if not (state / "bootstrap.json").is_file():
             raise ValueError("uninstall removed protected state")
-    print("Native install, autostart configuration, restart, overwrite refusal and state-preserving uninstall passed; no real Sunshine was modified.")
+    print("Native offline install, explicit-start policy, overwrite refusal and state-preserving uninstall passed; online service behavior requires enrolled-device acceptance.")
+
+
+def exercise_native_service(binary, seed, state, service_user=None):
+    import importlib.util
+    spec = importlib.util.spec_from_file_location("native_service_acceptance", Path(__file__).with_name("native-service-acceptance.py"))
+    module = importlib.util.module_from_spec(spec)
+    spec.loader.exec_module(module)
+    module.exercise(binary, seed, state, service_user)
 
 
 def main():
@@ -204,6 +205,7 @@ def main():
     parser.add_argument("--sha", required=True)
     parser.add_argument("--install", action="store_true")
     parser.add_argument("--installer", type=Path, help="MSI/DEB to exercise instead of script installation")
+    parser.add_argument("--seed", type=Path, help="native CI fixture executable for real service/IPC acceptance")
     args = parser.parse_args()
     if not re.fullmatch(r"[0-9a-f]{40}", args.sha):
         parser.error("full source SHA required")
@@ -217,7 +219,7 @@ def main():
                 manifest = json.loads(expected.read_text())
                 if manifest['source_commit'] != args.sha or manifest['sha256'] != digest(args.installer):
                     raise ValueError('installer source or checksum mismatch')
-            install_test(root, binary, temporary, args.installer.resolve() if args.installer else None)
+            install_test(root, binary, temporary, args.installer.resolve() if args.installer else None, args.seed.resolve() if args.seed else None)
 
 
 if __name__ == "__main__":

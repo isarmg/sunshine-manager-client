@@ -6,7 +6,7 @@
     <Cultures>en-US</Cultures>
     <SuppressSpecificWarnings>1075</SuppressSpecificWarnings>
     <SuppressIces>ICE74</SuppressIces>
-    <DefineConstants>ClientExe=$(ClientExe);TrayExe=$(TrayExe);ProductVersion=$(ProductVersion);LicenseRtf=$(MSBuildThisFileDirectory)License.rtf</DefineConstants>
+    <DefineConstants>ClientExe=$(ClientExe);ProductVersion=$(ProductVersion);LicenseRtf=$(MSBuildThisFileDirectory)License.rtf</DefineConstants>
     <OutputName>sunshine-client-$(ProductVersion)-windows-x64</OutputName>
   </PropertyGroup>
   <ItemGroup>

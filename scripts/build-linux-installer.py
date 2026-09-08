@@ -26,6 +26,7 @@ def main():
         shutil.copy2(args.binary, stage / 'opt/sunshine-client/sunshine-client')
         shutil.copy2(ROOT / 'deploy/configure-linux.py', stage / 'usr/bin/sunshine-client-setup')
         (stage / 'usr/bin/sunshine-client-setup').chmod(0o755)
+        (stage / 'usr/bin/sunshine-client').symlink_to('/opt/sunshine-client/sunshine-client')
         shutil.copy2(ROOT / 'deploy/sunshine-client.service', stage / 'usr/lib/systemd/system/sunshine-client.service')
         shutil.copy2(ROOT / 'LICENSE-APACHE', stage / 'usr/share/doc/sunshine-client/copyright')
         (stage / 'DEBIAN/control').write_text(f'''Package: sunshine-client
@@ -36,7 +37,7 @@ Depends: libc6 (>= 2.39), libgcc-s1, libssl3t64, ca-certificates, python3, syste
 Section: admin
 Priority: optional
 Description: Sunshine management client
- Run sudo sunshine-client-setup after installing to pair securely.
+ Run sudo sunshine-client pair --interactive after installation.
  No video forwarding, inbound listener or changes to Sunshine.
 ''')
         scripts = {
@@ -52,7 +53,8 @@ set -eu
 if [ "$1" = configure ]; then
  if ! getent passwd sunshine-client >/dev/null; then useradd --system --no-create-home --home-dir /var/lib/sunshine-client --shell /usr/sbin/nologin sunshine-client; fi
  systemctl daemon-reload
- echo 'Complete pairing: sudo sunshine-client-setup'
+ install -d -m 0700 -o sunshine-client -g sunshine-client /var/lib/sunshine-client
+ echo 'Pair: sudo sunshine-client pair --interactive; then sudo sunshine-client service enable --now'
 fi
 ''',
             'prerm': '''#!/bin/sh

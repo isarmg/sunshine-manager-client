@@ -30,11 +30,11 @@ pub struct Bootstrap {
 }
 #[derive(Serialize, Deserialize)]
 #[serde(deny_unknown_fields)]
-struct Identity {
-    binding: Binding,
-    credential: Zeroizing<String>,
-    config: Bootstrap,
-    enrolled: bool,
+pub(crate) struct Identity {
+    pub(crate) binding: Binding,
+    pub(crate) credential: Zeroizing<String>,
+    pub(crate) config: Bootstrap,
+    pub(crate) enrolled: bool,
 }
 #[derive(Debug, thiserror::Error)]
 pub enum ProvisionError {
@@ -46,6 +46,12 @@ pub enum ProvisionError {
     Unavailable,
     #[error("device credential or enrollment ticket rejected; local administrator action required")]
     Rejected,
+    #[error("Manager rate limited this request; resume the saved transaction later")]
+    RateLimited,
+    #[error("Manager protocol or platform is unsupported")]
+    Unsupported,
+    #[error("awaiting_pairing: stop the service and run pair explicitly")]
+    Unpaired,
     #[error(transparent)]
     Transport(#[from] TransportError),
     #[error("Client execution journal unavailable")]
@@ -70,7 +76,7 @@ pub(crate) fn pending_retry(config: &[u8], identity: &[u8]) -> bool {
 }
 
 impl Bootstrap {
-    fn validate(&self) -> Result<(), ProvisionError> {
+    pub(crate) fn validate(&self) -> Result<(), ProvisionError> {
         if self.enrollment_token.len() != 64 {
             return Err(ProvisionError::Configuration);
         }
@@ -78,7 +84,7 @@ impl Bootstrap {
         self.adapter()?;
         Ok(())
     }
-    fn adapter(&self) -> Result<LocalSunshine, ProvisionError> {
+    pub(crate) fn adapter(&self) -> Result<LocalSunshine, ProvisionError> {
         LocalSunshine::new(
             &self.sunshine_endpoint,
             &self.sunshine_username,
@@ -89,7 +95,7 @@ impl Bootstrap {
     }
 }
 impl Identity {
-    fn persist(&self, store: &ProtectedState) -> Result<(), ProvisionError> {
+    pub(crate) fn persist(&self, store: &ProtectedState) -> Result<(), ProvisionError> {
         let bytes = Zeroizing::new(serde_json::to_vec(self).map_err(config_error)?);
         store.put("identity.json", &bytes)?;
         Ok(())
@@ -139,7 +145,7 @@ async fn resolve_pairing(config: &Bootstrap) -> Result<PairingTarget, ProvisionE
         .await
         .map_err(|_| ProvisionError::Unavailable)?;
     if !response.status.is_success() {
-        return Err(ProvisionError::Rejected);
+        return Err(classify_status(response.status.as_u16()));
     }
     let target: PairingTarget = serde_json::from_slice(&response.body).map_err(config_error)?;
     if target.manager_id.is_nil() || target.device_id.is_nil() {
@@ -214,14 +220,14 @@ async fn provision(store: &ProtectedState) -> Result<Identity, ProvisionError> {
             .await
             .map_err(|_| ProvisionError::Unavailable)?;
         if matches!(response.status.as_u16(), 401 | 403) {
-            return Err(ProvisionError::Rejected);
+            return Err(classify_status(response.status.as_u16()));
         }
         if !response.status.is_success() {
-            return Err(ProvisionError::Unavailable);
+            return Err(classify_status(response.status.as_u16()));
         }
         serde_json::from_slice(&response.body).map_err(config_error)?
     } else {
-        return Err(ProvisionError::Rejected);
+        return Err(classify_status(response.status.as_u16()));
     };
     if binding != identity.binding {
         return Err(ProvisionError::Configuration);
@@ -235,6 +241,7 @@ async fn provision(store: &ProtectedState) -> Result<Identity, ProvisionError> {
 
 /// Local wizard completion requires a verified Sunshine read and successful enrollment.
 pub async fn pair(state_path: &Path) -> Result<(), ProvisionError> {
+    client_os()?;
     let _root = crate::storage::prepare_root(state_path)?;
     let store = ProtectedState::open(&state_path.join("provisioning"))?;
     let config: Bootstrap = if let Some(bytes) = store.read("identity.json")? {
@@ -249,26 +256,40 @@ pub async fn pair(state_path: &Path) -> Result<(), ProvisionError> {
         ))
         .map_err(config_error)?
     };
-    config.adapter()?.read().await.map_err(config_error)?;
+    config
+        .adapter()?
+        .read()
+        .await
+        .map_err(|error| match error {
+            crate::adapter::AdapterError::Unavailable => ProvisionError::Unavailable,
+            crate::adapter::AdapterError::UnsupportedVersion => ProvisionError::Unsupported,
+            crate::adapter::AdapterError::UnsafeConfiguration
+            | crate::adapter::AdapterError::InvalidLocalEndpoint => ProvisionError::Configuration,
+        })?;
     provision(&store).await?;
     Ok(())
 }
 pub async fn run(state_path: &Path, shutdown: watch::Receiver<bool>) -> Result<(), ProvisionError> {
+    let _maintenance = crate::storage::MaintenanceGuard::acquire(state_path)?;
     let _root = crate::storage::prepare_root(state_path)?;
     let store = ProtectedState::open(&state_path.join("provisioning"))?;
-    let mut stopping = shutdown.clone();
-    let identity = loop {
-        if *stopping.borrow() {
-            return Ok(());
-        }
-        match provision(&store).await {
-            Ok(identity) => break identity,
-            Err(ProvisionError::Unavailable) => {
-                tokio::select! {_=stopping.changed()=>{if *stopping.borrow(){return Ok(());}},_=tokio::time::sleep(Duration::from_secs(10))=>{}}
-            }
-            Err(error) => return Err(error),
-        }
-    };
+    // Service startup never enrolls, resumes pairing, or rotates credentials.
+    let bytes = Zeroizing::new(
+        store
+            .read("identity.json")?
+            .ok_or(ProvisionError::Unpaired)?,
+    );
+    let identity: Identity = serde_json::from_slice(&bytes).map_err(config_error)?;
+    if !identity.enrolled {
+        return Err(ProvisionError::Unpaired);
+    }
+    let _status = crate::runtime_status::publish(
+        state_path,
+        identity.binding.installation_id.to_string(),
+        crate::cli::settings_revision(&identity.config).map_err(config_error)?,
+    )
+    .map_err(|_| ProvisionError::Storage(StorageError::Unsafe))?;
+    drop(store); // Do not retain the short provisioning lock across network waits.
     let journal =
         FileJournal::open(&state_path.join("journal")).map_err(|_| ProvisionError::Journal)?;
     let executor = Arc::new(Executor::new(
@@ -282,11 +303,7 @@ pub async fn run(state_path: &Path, shutdown: watch::Receiver<bool>) -> Result<(
     let capabilities = Capabilities {
         protocol: PROTOCOL.into(),
         client_version: env!("CARGO_PKG_VERSION").into(),
-        os: if cfg!(target_os = "windows") {
-            ClientOs::WindowsX86_64
-        } else {
-            ClientOs::LinuxX86_64
-        },
+        os: client_os()?,
         sunshine_version: SUNSHINE_VERSION.into(),
         restart_allowed: identity.config.restart_allowed,
         managed_fields: FIELDS.iter().map(|s| s.to_string()).collect(),
@@ -296,13 +313,24 @@ pub async fn run(state_path: &Path, shutdown: watch::Receiver<bool>) -> Result<(
     // Read-only health probes do not share the mutation lane and survive a Sunshine restart.
     let monitor = async move {
         loop {
+            let started = tokio::time::Instant::now();
             let read = adapter.read().await;
+            crate::runtime_status::observe("sunshine_reachable", serde_json::json!(read.is_ok()));
+            crate::runtime_status::observe(
+                "sunshine_observed_at",
+                serde_json::json!(
+                    std::time::SystemTime::now()
+                        .duration_since(std::time::UNIX_EPOCH)
+                        .unwrap_or_default()
+                        .as_secs()
+                ),
+            );
             let observation = HealthObservation {
                 sunshine_reachable: read.is_ok(),
                 configuration: read
                     .ok()
                     .map(|c| c.snapshot(Effectiveness::PendingVerification)),
-                observed_at: Some(tokio::time::Instant::now()),
+                observed_at: Some(started),
             };
             if health_tx.send(observation).is_err() {
                 break;
@@ -368,4 +396,49 @@ mod bootstrap_tests {
             assert!(super::validate_bootstrap(bytes).is_err());
         }
     }
+}
+
+fn classify_status(status: u16) -> ProvisionError {
+    match status {
+        401 | 403 => ProvisionError::Rejected,
+        429 => ProvisionError::RateLimited,
+        408 | 500..=599 => ProvisionError::Unavailable,
+        404 | 405 | 406 | 426 => ProvisionError::Unsupported,
+        _ => ProvisionError::Configuration,
+    }
+}
+fn client_os() -> Result<ClientOs, ProvisionError> {
+    match (std::env::consts::OS, std::env::consts::ARCH) {
+        ("windows", "x86_64") => Ok(ClientOs::WindowsX86_64),
+        ("linux", "x86_64") => Ok(ClientOs::LinuxX86_64),
+        ("macos", "x86_64") => Ok(ClientOs::MacosX86_64),
+        ("macos", "aarch64") => Ok(ClientOs::MacosAarch64),
+        _ => Err(ProvisionError::Unsupported),
+    }
+}
+#[cfg(test)]
+mod error_tests {
+    use super::*;
+    #[test]
+    fn temporary_failures_are_not_bad_credentials() {
+        assert!(matches!(classify_status(503), ProvisionError::Unavailable));
+        assert!(matches!(classify_status(429), ProvisionError::RateLimited));
+        assert!(matches!(classify_status(401), ProvisionError::Rejected));
+        assert!(matches!(classify_status(426), ProvisionError::Unsupported));
+    }
+}
+
+pub(crate) fn network_probe(config: &Bootstrap) -> Result<serde_json::Value, ProvisionError> {
+    let mut url = Url::parse(&config.manager_endpoint).map_err(config_error)?;
+    url.set_scheme("https").map_err(config_error)?;
+    url.set_path("/health/live");
+    let response = system_client()?
+        .get_client_blocking(url.as_str(), Default::default())
+        .map_err(|_| ProvisionError::Unavailable)?;
+    if !response.status.is_success() {
+        return Err(classify_status(response.status.as_u16()));
+    }
+    Ok(
+        serde_json::json!({"reachable":true,"scope":"public_health_endpoint","trust_context":"current_cli_account"}),
+    )
 }

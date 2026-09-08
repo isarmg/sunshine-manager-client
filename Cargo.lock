@@ -1741,6 +1741,7 @@ dependencies = [
  "async-trait",
  "base64",
  "futures-util",
+ "libc",
  "native-tls",
  "rand 0.8.8",
  "reqwest",
@@ -1766,7 +1767,7 @@ dependencies = [
 [[package]]
 name = "sunshine-client-protocol"
 version = "0.1.0"
-source = "git+https://github.com/isarmg/sunshine-manager-server.git?rev=d9103beec4d11d97f63fcfc866b709fad9057007#d9103beec4d11d97f63fcfc866b709fad9057007"
+source = "git+https://github.com/isarmg/sunshine-manager-server.git?rev=d4b98b06a00d185bd845a4bd3e3df8c939807864#d4b98b06a00d185bd845a4bd3e3df8c939807864"
 dependencies = [
  "serde",
  "serde_json",
