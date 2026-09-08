@@ -34,6 +34,7 @@ else
   meta() { stat -f "$1" "$2"; }
   uid_format=%u; mode_format=%Lp
 fi
+[[ -f $source_unit && ! -L $source_unit ]] || exit 8
 # Validate every ancestor, then only product-owned leaves. Never recurse through
 # the existing state tree, replace credentials, or follow a redirected target.
 check_parent() {
@@ -98,7 +99,9 @@ rollback() {
   exit "$result"
 }
 trap rollback EXIT
-if [[ $os = Linux ]]; then systemctl stop sunshine-client.service; elif [[ $active = 1 ]]; then launchctl bootout system/org.sarmg.sunshine-client; fi
+if [[ $os = Linux ]]; then
+  if [[ $had_unit = 1 || $active = 1 ]]; then systemctl stop sunshine-client.service; fi
+elif [[ $active = 1 ]]; then launchctl bootout system/org.sarmg.sunshine-client; fi
 stopped=1
 install -d -m 0755 "$(dirname "$target")"
 install -m 0755 "$source_binary" "$backup/new-binary"
