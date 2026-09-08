@@ -55,8 +55,8 @@ def main():
     machine = platform.machine().lower()
     windows = platform.system() == "Windows"
     macos = platform.system() == "Darwin"
-    if macos and machine in ("arm64", "aarch64", "x86_64"):
-        target = ("x86_64" if machine == "x86_64" else "aarch64") + "-apple-darwin"
+    if macos and machine in ("arm64", "aarch64"):
+        target = "aarch64-apple-darwin"
     elif machine in ("x86_64", "amd64") and (windows or (platform.system() == "Linux" and platform.libc_ver()[0] == "glibc")):
         target = "x86_64-pc-windows-msvc" if windows else "x86_64-unknown-linux-gnu"
     else:
@@ -106,6 +106,9 @@ def main():
     elif not macos:
         subprocess.run(["python3", str(ROOT / "scripts/build-linux-installer.py"), "--binary", str(binary),
                         "--output", str(args.output), "--version", version], check=True)
+    # WiX debug databases are build intermediates, not release assets.
+    for debug_database in args.output.glob("*.wixpdb"):
+        debug_database.unlink()
     for installer in sorted(args.output.glob("*.msi")) + sorted(args.output.glob("*.deb")):
         installer.with_name(installer.name + ".sha256").write_text(f"{digest(installer)}  {installer.name}\n")
         installer.with_name(installer.name + ".manifest.json").write_text(json.dumps({

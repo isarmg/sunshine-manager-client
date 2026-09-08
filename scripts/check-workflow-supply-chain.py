@@ -136,7 +136,6 @@ def validate_job(source: str, header: Line, segment: list[Line]) -> None:
     native_client_runners = {
         "client-windows-package:": CLIENT_WINDOWS_RUNNER,
         "client-macos-arm64:": "macos-15",
-        "client-macos-x64:": "macos-15-intel",
     }
     expected_runner = native_client_runners.get(header.content, FIXED_RUNNER) if source == ".github/workflows/ci.yml" else FIXED_RUNNER
     if len(runners) != 1 or runners[0].content != f"runs-on: {expected_runner}":
@@ -346,7 +345,7 @@ jobs:
     validate_workflow("positive-fixture.yml", base)
     windows_client = base.replace("  test:", "  client-windows-package:").replace(FIXED_RUNNER, CLIENT_WINDOWS_RUNNER)
     validate_workflow(".github/workflows/ci.yml", windows_client)
-    for job, runner in (("client-macos-arm64:", "macos-15"), ("client-macos-x64:", "macos-15-intel")):
+    for job, runner in (("client-macos-arm64:", "macos-15"),):
         fixture = base.replace("  test:", "  " + job).replace(FIXED_RUNNER, runner)
         validate_workflow(".github/workflows/ci.yml", fixture)
         for invalid in (fixture.replace(runner, "macos-latest"), fixture.replace(job, "server:")):
@@ -356,6 +355,7 @@ jobs:
                 continue
             raise PolicyError("negative self-test accepted a floating macOS runner or macOS Server job")
     cases = {
+        "retired Intel macOS runner": base.replace(FIXED_RUNNER, "macos-15-intel"),
         "floating action": base.replace(
             PINNED_OFFICIAL_ACTIONS["actions/checkout"], "v4"
         ),

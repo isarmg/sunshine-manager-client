@@ -2,7 +2,9 @@
 
 Sunshine 的独立本机管理代理，公开入口为 `sunshine-client`。不处理视频流，不安装或停止 Sunshine 本体，不索取屏幕录制/输入控制权限。后台使用系统服务，删除了 C# 托盘与第二套配对向导。
 
-当前纯 CLI 与系统服务版本为 [v0.1.0-rc.4 预发布](https://github.com/isarmg/sunshine-manager-client/releases/tag/v0.1.0-rc.4)；用法和验收限制见 [CLI 改造说明](docs/releases/cli-unreleased.md)。安装产物未签名、未公证，实机与升级验收边界见发行说明。
+当前纯 CLI 与系统服务版本为 [v0.1.0-rc.5 预发布](https://github.com/isarmg/sunshine-manager-client/releases/tag/v0.1.0-rc.5)；用法和验收限制见 [CLI 改造说明](docs/releases/cli-unreleased.md)。安装产物未签名、未公证，实机与升级验收边界见发行说明。
+
+支持 Windows x64、Linux x64 和 macOS Apple Silicon（arm64）。不再为 Intel macOS 适配、运行 CI 或提供发行包。
 
 ## 初次配置
 
