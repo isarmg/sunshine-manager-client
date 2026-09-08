@@ -38,6 +38,13 @@ jobs:
           tag_args=()
           if [[ "$GITHUB_REF_TYPE" == tag ]]; then tag_args+=(--require-tag); fi
           python3 scripts/package-client.py --output "$RUNNER_TEMP/client-output" "${tag_args[@]}"
+      - name: Prepare protected installation root on the disposable hosted runner
+        run: |
+          test "$GITHUB_ACTIONS" = true
+          test "$RUNNER_ENVIRONMENT" = github-hosted
+          # Hosted images ship /opt mode 0777. Production repair correctly
+          # refuses writable ancestors; normalize this disposable fixture only.
+          sudo chmod go-w /opt
       - name: Verify extracted package and actual systemd install lifecycle
         run: |
           mapfile -t archives < <(find "$RUNNER_TEMP/client-output" -maxdepth 1 -type f -name '*.tar.gz')
