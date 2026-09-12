@@ -16,6 +16,24 @@ marker='/private/var/run/org.sarmg.sunshine-client.was-loaded'
 # /etc and /var are OS-managed aliases on macOS. Validate their physical
 # locations rather than rejecting a normal installation for using those
 # documented aliases in the launchd plist and newsyslog entry.
+trace_file='/private/var/log/sunshine-client-pkg-postinstall.log'
+trace_enabled=0
+if : >> "$trace_file" 2>/dev/null; then
+  chmod 0600 "$trace_file"
+  exec 2>> "$trace_file"
+  trace_enabled=1
+  set -x
+fi
+cleanup_trace() {
+  status=$?
+  set +e
+  if [ "$status" = 0 ] && [ "$trace_enabled" = 1 ]; then
+    rm -f "$trace_file"
+  fi
+  exit "$status"
+}
+trap cleanup_trace EXIT
+
 for path in /Library /Library/LaunchDaemons "/Library/Application Support" /usr/local /usr/local/bin /usr/local/libexec /private/etc /private/etc/newsyslog.d /private/var/log /private/var/run; do
   [ ! -L "$path" ] || exit 8
   if [ -d "$path" ]; then
