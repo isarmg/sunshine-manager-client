@@ -28,11 +28,11 @@
     <StandardDirectory Id="ProgramMenuFolder" />
     <Feature Id="Complete" Title="Sunshine Client" Level="1"><ComponentRef Id="ClientService" /></Feature>
     <!--
-      Normal MSI installs hand the terminal to the installed CLI after the
-      transaction commits. Silent/automation installs skip this action and
-      can resume with sunshine-client setup without losing installed state.
+      The installed CLI relaunches this interactive session through the Windows
+      runas verb before it reads or writes protected state. Silent/automation
+      installs skip this action and can resume with an elevated setup command.
     -->
-    <CustomAction Id="LaunchInteractiveSetup" FileRef="ClientExe" ExeCommand="setup --interactive" Execute="immediate" Impersonate="yes" Return="ignore" />
+    <CustomAction Id="LaunchInteractiveSetup" FileRef="ClientExe" ExeCommand="setup --interactive --installer-session" Execute="immediate" Impersonate="yes" Return="ignore" />
     <InstallExecuteSequence>
       <Custom Action="LaunchInteractiveSetup" After="InstallFinalize" Condition="NOT Installed AND NOT REMOVE~=&quot;ALL&quot; AND UILevel &gt;= 4" />
     </InstallExecuteSequence>

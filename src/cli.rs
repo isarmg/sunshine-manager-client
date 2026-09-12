@@ -583,10 +583,39 @@ fn no_args(args: &Args) -> u8 {
 }
 
 pub fn entry(raw: Vec<String>) -> u8 {
+    let parse_format = requested_error_format(&raw);
+    #[cfg(windows)]
+    let elevation_raw = raw.clone();
     let args = match Args::parse(raw) {
         Ok(a) => a,
-        Err(e) => return emit("sunshine-client", "parse", "json", &Err(e)),
+        Err(e) => return emit("sunshine-client", "parse", parse_format, &Err(e)),
     };
+    #[cfg(windows)]
+    if args.words == ["setup"] {
+        let interactive = !args.has("--non-interactive") && !args.has("--input-stdin");
+        let installer_session = args.has("--installer-session");
+        match prepare_windows_setup_elevation(
+            &elevation_raw,
+            interactive,
+            installer_session,
+            args.has("--elevated-setup-child"),
+        ) {
+            Ok(WindowsSetupElevation::Continue) => {}
+            Ok(WindowsSetupElevation::ChildExited(exit)) => {
+                if !installer_session {
+                    if exit == 0 {
+                        println!("Setup completed with administrator privileges.");
+                    } else {
+                        eprintln!(
+                            "Setup failed with exit code {exit}. Run `sunshine-client setup` from an Administrator terminal to keep the error visible."
+                        );
+                    }
+                }
+                return exit;
+            }
+            Err(error) => return emit("sunshine-client", "setup", &args.format, &Err(error)),
+        }
+    }
     if args.has("--help") {
         println!(
             "sunshine-client: setup; config init|show|validate|diff|apply; pair [status|resume]; credentials update; status; doctor; service status|start|stop|restart|enable|disable; run; version\nGlobal: --format human|json|ndjson --non-interactive --timeout 60s --no-color --config ABSOLUTE_STATE_DIRECTORY (--state compatibility alias)\nsetup/pair uses --interactive or --input-stdin; setup completes pairing, service startup policy and connection verification. No secret arguments. Configuration apply requires --expected-revision. Services must be stopped for writes."
@@ -631,7 +660,15 @@ pub fn entry(raw: Vec<String>) -> u8 {
     }
     let command = args.words.join(" ");
     let result = execute(&args);
-    emit("sunshine-client", &command, &args.format, &result)
+    let exit = emit("sunshine-client", &command, &args.format, &result);
+    #[cfg(windows)]
+    if args.words == ["setup"]
+        && args.has("--installer-session")
+        && args.has("--elevated-setup-child")
+    {
+        pause_installer_setup();
+    }
+    exit
 }
 fn execute(args: &Args) -> Result<Value> {
     let words: Vec<_> = args.words.iter().map(String::as_str).collect();
@@ -651,7 +688,13 @@ fn execute(args: &Args) -> Result<Value> {
         .unwrap_or_else(default_state);
     match words.as_slice() {
         ["setup"] => {
-            args.validate_options(&["--interactive", "--input-stdin", "--server"])?;
+            args.validate_options(&[
+                "--interactive",
+                "--input-stdin",
+                "--server",
+                "--installer-session",
+                "--elevated-setup-child",
+            ])?;
             setup(args, path)
         }
         ["tasks", "list"] => {

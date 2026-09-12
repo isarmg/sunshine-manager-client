@@ -28,7 +28,10 @@ class InstallerTests(unittest.TestCase):
         setup = tree.find('.//w:CustomAction[@Id="LaunchInteractiveSetup"]', ns)
         self.assertIsNotNone(setup)
         self.assertEqual(setup.get('FileRef'), 'ClientExe')
-        self.assertEqual(setup.get('ExeCommand'), 'setup --interactive')
+        self.assertEqual(
+            setup.get('ExeCommand'),
+            'setup --interactive --installer-session',
+        )
         self.assertEqual(setup.get('Execute'), 'immediate')
         self.assertEqual(setup.get('Impersonate'), 'yes')
         self.assertEqual(setup.get('Return'), 'ignore')
