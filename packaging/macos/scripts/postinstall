@@ -38,7 +38,13 @@ for path in /Library /Library/LaunchDaemons "/Library/Application Support" /usr/
   [ ! -L "$path" ] || exit 8
   if [ -d "$path" ]; then
     [ "$(stat -f %u "$path")" = 0 ] || exit 8
-    [ $((0$(stat -f %Lp "$path") & 0022)) -eq 0 ] || exit 8
+    # macOS owns /var/run (backed by /private/var/run) and some hosted
+    # images expose its runtime directory with a group-write bit. The
+    # directory is still required to be the real root-owned system path;
+    # only product-created files inside it are constrained by this package.
+    if [ "$path" != /private/var/run ]; then
+      [ $((0$(stat -f %Lp "$path") & 0022)) -eq 0 ] || exit 8
+    fi
   fi
 done
 
