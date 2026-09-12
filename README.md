@@ -2,7 +2,7 @@
 
 Sunshine 的独立本机管理代理，公开入口为 `sunshine-client`。不处理视频流，不安装或停止 Sunshine 本体，不索取屏幕录制/输入控制权限。后台使用系统服务，删除了 C# 托盘与第二套配对向导。
 
-当前纯 CLI 与系统服务版本为 [v0.1.0-rc.7 预发布](https://github.com/isarmg/sunshine-manager-client/releases/tag/v0.1.0-rc.7)；用法和验收限制见 [CLI 改造说明](docs/releases/cli-unreleased.md)。安装产物未签名、未公证，实机与升级验收边界见发行说明。
+当前纯 CLI 与系统服务版本为 [v0.1.0-rc.8 预发布](https://github.com/isarmg/sunshine-manager-client/releases/tag/v0.1.0-rc.8)；用法和验收限制见 [CLI 改造说明](docs/releases/cli-unreleased.md)。安装产物未签名、未公证，实机与升级验收边界见发行说明。
 
 支持 Windows x64、Linux x64 和 macOS Apple Silicon（arm64）。不再为 Intel macOS 适配、运行 CI 或提供发行包。
 
@@ -14,7 +14,7 @@ Sunshine 的独立本机管理代理，公开入口为 `sunshine-client`。不�
 sunshine-client setup
 ```
 
-Unix 写操作使用 `sudo`，Windows 使用管理员终端。有交互终端的原生安装器会在部署提交后直接调用 `setup`；静默或无终端安装只完成部署并保留进度。`setup` 会检查已有身份并恢复未完成事务，询问是否启用开机运行、立即启动服务和验证连接。配对失败保留安装、身份和安全进度，再次运行 `setup` 即可继续；后台 `run` 不会隐式配对或生成第二个守护进程。
+Unix 写操作使用 `sudo`，Windows 使用管理员终端。有交互终端的原生安装器会在部署提交后直接调用 `setup`；静默或无终端安装只完成部署并保留进度。`setup` 会检查已有身份并恢复未完成事务，询问是否启用开机运行、立即启动服务和验证连接。配置、配对持久化、服务注册、启动策略、运行状态与连接均逐关卡复查，只有当前关卡验证成功才进入下一关；失败结果包含稳定的 `error.code`、`error.step`、可读 `error.message`，服务管理器失败还包含受限长度的 `error.detail`。配对失败保留安装、身份和安全进度，再次运行 `setup` 即可继续；后台 `run` 不会隐式配对或生成第二个守护进程。
 
 配对只需 Server HTTPS origin、配对码、本机 Sunshine HTTPS 地址及凭据；内部 Manager/Device ID 由 Server 解析。Sunshine 地址沿用现有策略：**HTTPS 回环 IP 字面量**，如 `https://127.0.0.1:47990/`，证书必须受实际运行账户信任且名称匹配。没有 `--insecure`，也不自动接受自签名证书。
 

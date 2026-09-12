@@ -28,6 +28,16 @@ def powershell(script):
     return run("powershell.exe", "-NoProfile", "-NonInteractive", "-Command", "$ErrorActionPreference='Stop'; " + script)
 
 
+def machine_path_entry_count(path):
+    expected = os.path.normcase(os.path.normpath(str(path)))
+    machine_path = powershell("[Environment]::GetEnvironmentVariable('Path','Machine')")
+    return sum(
+        os.path.normcase(os.path.normpath(entry.strip())) == expected
+        for entry in machine_path.split(";")
+        if entry.strip()
+    )
+
+
 def digest(path):
     with path.open("rb") as source:
         return hashlib.file_digest(source, "sha256").hexdigest()
@@ -141,6 +151,8 @@ foreach($path in @('{escaped}', '{escaped}\\bootstrap.json')) {{
 """)
         subprocess.run(['msiexec.exe', '/i', str(installer), '/qn', '/norestart'], check=True)
         installed = Path(os.environ['ProgramFiles']) / 'SunshineClient'
+        if machine_path_entry_count(installed) != 1:
+            raise ValueError('MSI did not add exactly one machine PATH entry')
         if (installed / 'sunshine-client-tray.exe').exists():
             raise ValueError('CLI installer contains a tray executable')
         subprocess.run([str(installed / 'sunshine-client.exe'), 'init', '--state', str(Path(os.environ['ProgramData']) / 'SunshineClient'), '--bootstrap', str(bootstrap)], check=True, timeout=60)
@@ -149,6 +161,8 @@ foreach($path in @('{escaped}', '{escaped}\\bootstrap.json')) {{
         state_file = Path(os.environ['ProgramData']) / 'SunshineClient/provisioning/state.sqlite3'
         before = state_file.read_bytes()
         subprocess.run(['msiexec.exe', '/i', str(installer), '/qn', '/norestart'], check=True)
+        if machine_path_entry_count(installed) != 1:
+            raise ValueError('MSI repair duplicated or removed its machine PATH entry')
         if state_file.read_bytes() != before:
             raise ValueError("repair changed existing protected state")
 
@@ -158,6 +172,8 @@ foreach($path in @('{escaped}', '{escaped}\\bootstrap.json')) {{
             subprocess.run(['msiexec.exe', '/x', str(installer), '/qn', '/norestart'], check=True)
             if (installed / 'sunshine-client-tray.exe').exists():
                 raise ValueError('MSI uninstall retained tray executable')
+            if machine_path_entry_count(installed) != 0:
+                raise ValueError('MSI uninstall retained its machine PATH entry')
         if not (Path(os.environ["ProgramData"]) / "SunshineClient/provisioning/state.sqlite3").is_file():
             raise ValueError("uninstall removed protected state")
     else:

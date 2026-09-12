@@ -14,6 +14,7 @@
       <Directory Id="INSTALLFOLDER" Name="SunshineClient">
         <Component Id="ClientService" Guid="4C3D6380-EB5B-45B8-B9F7-77B28CD14E82" Bitness="always64">
           <File Id="ClientExe" Source="$(var.ClientExe)" Name="sunshine-client.exe" KeyPath="yes" />
+          <Environment Id="SunshineClientMachinePath" Name="PATH" Value="[INSTALLFOLDER]" Action="set" Part="last" Permanent="no" System="yes" />
           <RemoveRegistryValue Id="RemoveLegacyTrayRun" Root="HKLM" Key="Software\Microsoft\Windows\CurrentVersion\Run" Name="SunshineClientTray" />
           <RemoveFile Id="RemoveLegacyTrayFile" Name="sunshine-client-tray.exe" On="install" />
           <RemoveFile Id="RemoveLegacyTrayShortcut" Directory="ProgramMenuFolder" Name="Sunshine Client.lnk" On="install" />
