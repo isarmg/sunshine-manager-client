@@ -78,8 +78,9 @@ def main():
         shutil.copy2(binary, stage / executable)
         for source, destination in COMMON_FILES.items():
             shutil.copy2(ROOT / source, stage / destination)
-        for item in (["install-windows.ps1", "uninstall-windows.ps1"] if windows else ["repair-existing.sh", "macos/install-macos.sh", "macos/uninstall-macos.sh", "macos/org.sarmg.sunshine-client.plist"] if macos else ["repair-existing.sh", "install-linux.sh", "uninstall-linux.sh", "sunshine-client.service"]):
-            shutil.copy2(ROOT / "deploy" / item, stage / Path(item).name)
+        # The native package is the only installer. Keep the archive limited to
+        # the executable, immutable docs and verification metadata; no shell,
+        # PowerShell or Python installer wrapper is distributed.
         manifest = {"product": "sunshine-client", "version": version, "source_commit": sha, "target": target,
                     "protocol": "sunshine-management/1", "authenticode_signed": False, "native_acceptance": "required", "notarized": False,
                     "files": {p.name: digest(p) for p in package_files(stage)}}
@@ -103,13 +104,28 @@ def main():
         numeric_version = version.split("-")[0]
         (args.output / f"sunshine-client-{numeric_version}-windows-x64.msi").rename(
             args.output / f"sunshine-client-{version}-windows-x64.msi")
-    elif not macos:
+    elif macos:
+        subprocess.run(
+            [
+                "sh",
+                str(ROOT / "packaging/macos/build-pkg.sh"),
+                str(binary),
+                version,
+                str(args.output / f"sunshine-client-{version}-macos-arm64-unsigned.pkg"),
+            ],
+            check=True,
+        )
+    else:
         subprocess.run(["python3", str(ROOT / "scripts/build-linux-installer.py"), "--binary", str(binary),
                         "--output", str(args.output), "--version", version], check=True)
     # WiX debug databases are build intermediates, not release assets.
     for debug_database in args.output.glob("*.wixpdb"):
         debug_database.unlink()
-    for installer in sorted(args.output.glob("*.msi")) + sorted(args.output.glob("*.deb")):
+    for installer in (
+        sorted(args.output.glob("*.msi"))
+        + sorted(args.output.glob("*.deb"))
+        + sorted(args.output.glob("*.pkg"))
+    ):
         installer.with_name(installer.name + ".sha256").write_text(f"{digest(installer)}  {installer.name}\n")
         installer.with_name(installer.name + ".manifest.json").write_text(json.dumps({
             "product": "sunshine-client", "version": version, "source_commit": sha,

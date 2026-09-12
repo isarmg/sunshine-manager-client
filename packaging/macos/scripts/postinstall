@@ -1,0 +1,114 @@
+#!/bin/sh
+set -eu
+
+[ "$(uname -s)" = Darwin ] && [ "$(uname -m)" = arm64 ] && [ "$(id -u)" = 0 ] || exit 8
+
+account='_sunshineclient'
+group='_sunshineclient'
+state='/Library/Application Support/sunshine-client'
+plist='/Library/LaunchDaemons/org.sarmg.sunshine-client.plist'
+binary='/usr/local/libexec/sunshine-client'
+link='/usr/local/bin/sunshine-client'
+log='/var/log/sunshine-client.log'
+rotation='/etc/newsyslog.d/sunshine-client.conf'
+marker='/var/run/org.sarmg.sunshine-client.was-loaded'
+
+for path in /Library /Library/LaunchDaemons "/Library/Application Support" /usr/local /usr/local/bin /usr/local/libexec /etc /etc/newsyslog.d /var/log /var/run; do
+  [ ! -L "$path" ] || exit 8
+  if [ -d "$path" ]; then
+    [ "$(stat -f %u "$path")" = 0 ] || exit 8
+    [ $((0$(stat -f %Lp "$path") & 0022)) -eq 0 ] || exit 8
+  fi
+done
+
+if dscl . -read /Groups/$group >/dev/null 2>&1; then
+  group_exists=1
+else
+  group_exists=0
+fi
+if dscl . -read /Users/$account >/dev/null 2>&1; then
+  user_exists=1
+else
+  user_exists=0
+fi
+[ "$group_exists" = "$user_exists" ] || { echo 'service account/group is only partially present.' >&2; exit 8; }
+
+if [ "$user_exists" = 0 ]; then
+  uid=300
+  while [ "$uid" -lt 500 ]; do
+    if ! dscl . -search /Users UniqueID "$uid" | grep -q . && ! dscl . -search /Groups PrimaryGroupID "$uid" | grep -q .; then
+      break
+    fi
+    uid=$((uid + 1))
+  done
+  [ "$uid" -lt 500 ] || exit 8
+  dscl . -create /Groups/$group
+  dscl . -create /Groups/$group PrimaryGroupID "$uid"
+  dscl . -create /Users/$account
+  dscl . -create /Users/$account UniqueID "$uid"
+  dscl . -create /Users/$account PrimaryGroupID "$uid"
+  dscl . -create /Users/$account UserShell /usr/bin/false
+  dscl . -create /Users/$account NFSHomeDirectory /var/empty
+  dscl . -create /Users/$account IsHidden 1
+fi
+
+service_uid=$(dscl . -read /Users/$account UniqueID | awk '{print $2}')
+service_gid=$(dscl . -read /Groups/$group PrimaryGroupID | awk '{print $2}')
+[ "$service_uid" ] && [ "$service_uid" = "$service_gid" ] || exit 8
+[ "$service_uid" != 0 ] || exit 8
+[ "$(dscl . -read /Users/$account PrimaryGroupID | awk '{print $2}')" = "$service_gid" ] || exit 8
+[ "$(dscl . -read /Users/$account UserShell | awk '{print $2}')" = /usr/bin/false ] || exit 8
+[ "$(dscl . -read /Users/$account NFSHomeDirectory | awk '{print $2}')" = /var/empty ] || exit 8
+
+if [ ! -e "$state" ]; then
+  mkdir -m 0700 "$state"
+  chown "$account:$group" "$state"
+else
+  [ -d "$state" ] && [ ! -L "$state" ] || exit 8
+  [ "$(stat -f %u "$state")" = "$service_uid" ] || exit 8
+  chmod 0700 "$state"
+fi
+
+[ -f "$binary" ] && [ ! -L "$binary" ] || exit 8
+[ -L "$link" ] && [ "$(readlink "$link")" = /usr/local/libexec/sunshine-client ] || exit 8
+[ -f "$plist" ] && [ ! -L "$plist" ] || exit 8
+/usr/bin/plutil -lint "$plist" >/dev/null
+/usr/libexec/PlistBuddy -c 'Print :ProgramArguments:0' "$plist" | /usr/bin/grep -qx /usr/local/libexec/sunshine-client || exit 8
+chown root:wheel "$binary" "$plist"
+chmod 0755 "$binary"
+chmod 0644 "$plist"
+
+if [ ! -e "$log" ]; then
+  install -m 0600 -o "$account" -g "$group" /dev/null "$log"
+else
+  [ -f "$log" ] && [ ! -L "$log" ] || exit 8
+  [ "$(stat -f %u "$log")" = "$service_uid" ] || exit 8
+  chmod 0600 "$log"
+fi
+
+expected_rotation='/var/log/sunshine-client.log _sunshineclient:_sunshineclient 600 7 1024 * J'
+if [ -e "$rotation" ] || [ -L "$rotation" ]; then
+  [ -f "$rotation" ] && [ ! -L "$rotation" ] || exit 8
+  [ "$(cat "$rotation")" = "$expected_rotation" ] || exit 8
+else
+  rotation_tmp="/etc/newsyslog.d/.sunshine-client.conf.$$"
+  [ ! -e "$rotation_tmp" ] && [ ! -L "$rotation_tmp" ] || exit 8
+  (umask 022; set -C; printf '%s\n' "$expected_rotation" > "$rotation_tmp")
+  chown root:wheel "$rotation_tmp"
+  chmod 0644 "$rotation_tmp"
+  mv "$rotation_tmp" "$rotation"
+fi
+
+if [ -e "$marker" ] || [ -L "$marker" ]; then
+  [ -f "$marker" ] && [ ! -L "$marker" ] || exit 8
+  launchctl bootstrap system "$plist"
+  rm -f "$marker"
+fi
+
+if [ -t 0 ] && [ -t 1 ]; then
+  if ! "$link" setup --interactive; then
+    echo 'Setup was not completed; installation, identity and pairing progress were retained.' >&2
+  fi
+else
+  echo 'No interactive terminal was available; resume with: sudo /usr/local/bin/sunshine-client setup' >&2
+fi

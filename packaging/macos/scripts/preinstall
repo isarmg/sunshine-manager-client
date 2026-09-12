@@ -1,0 +1,34 @@
+#!/bin/sh
+set -eu
+
+[ "$(uname -s)" = Darwin ] && [ "$(uname -m)" = arm64 ] && [ "$(id -u)" = 0 ] || exit 8
+
+state='/Library/Application Support/sunshine-client'
+plist='/Library/LaunchDaemons/org.sarmg.sunshine-client.plist'
+binary='/usr/local/libexec/sunshine-client'
+link='/usr/local/bin/sunshine-client'
+marker='/var/run/org.sarmg.sunshine-client.was-loaded'
+
+for path in /Library /Library/LaunchDaemons "/Library/Application Support" /usr/local /usr/local/bin /usr/local/libexec /var/run; do
+  [ ! -L "$path" ] || { echo "Refusing symlinked package root: $path" >&2; exit 8; }
+done
+if [ -e "$state" ] || [ -L "$state" ]; then
+  [ -d "$state" ] && [ ! -L "$state" ] || exit 8
+fi
+if [ -e "$binary" ] || [ -L "$binary" ]; then
+  [ -f "$binary" ] && [ ! -L "$binary" ] || exit 8
+fi
+if [ -e "$link" ] || [ -L "$link" ]; then
+  [ -L "$link" ] && [ "$(readlink "$link")" = /usr/local/libexec/sunshine-client ] || exit 8
+fi
+if [ -e "$plist" ] || [ -L "$plist" ]; then
+  [ -f "$plist" ] && [ ! -L "$plist" ] || exit 8
+  /usr/bin/plutil -lint "$plist" >/dev/null
+  /usr/libexec/PlistBuddy -c 'Print :ProgramArguments:0' "$plist" | /usr/bin/grep -qx /usr/local/libexec/sunshine-client || exit 8
+fi
+[ ! -e "$marker" ] && [ ! -L "$marker" ] || { echo 'stale launchd transaction marker exists.' >&2; exit 8; }
+
+if launchctl print system/org.sarmg.sunshine-client >/dev/null 2>&1; then
+  launchctl bootout system/org.sarmg.sunshine-client
+  (umask 077; set -C; : > "$marker")
+fi

@@ -50,7 +50,7 @@ pub enum ProvisionError {
     RateLimited,
     #[error("Manager protocol or platform is unsupported")]
     Unsupported,
-    #[error("awaiting_pairing: stop the service and run pair explicitly")]
+    #[error("awaiting_pairing: run setup or pair explicitly")]
     Unpaired,
     #[error(transparent)]
     Transport(#[from] TransportError),

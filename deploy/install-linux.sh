@@ -73,4 +73,4 @@ systemctl daemon-reload
 ln -s /opt/sunshine-client/sunshine-client /usr/local/bin/sunshine-client
 made_link=1
 committed=1
-echo "Client installed. Run sunshine-client pair --interactive, then sunshine-client service enable --now."
+echo "Client installed. Run sunshine-client setup --interactive."

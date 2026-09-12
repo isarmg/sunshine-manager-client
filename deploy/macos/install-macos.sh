@@ -87,4 +87,4 @@ made_rotation=1
 printf '%s\n' '/var/log/sunshine-client.log _sunshineclient:_sunshineclient 600 7 1024 * J' > /etc/newsyslog.d/sunshine-client.conf
 launchctl disable system/org.sarmg.sunshine-client
 committed=1
-echo 'Installed without pairing or service startup. Run sunshine-client pair --interactive, then sunshine-client service enable --now.'
+echo 'Installed without pairing or service startup. Run sunshine-client setup --interactive.'

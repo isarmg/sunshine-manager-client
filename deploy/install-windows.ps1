@@ -82,7 +82,7 @@ try {
     }
     if ($wasRunning) { Start-Service SunshineClient }
     Remove-Item -LiteralPath $backup -Recurse -Force -ErrorAction SilentlyContinue
-    Write-Host 'Client installed. Run the installed sunshine-client.exe pair --interactive, then sunshine-client service enable --now. No Sunshine process or firewall rule was changed.'
+    Write-Host 'Client installed. Run the installed sunshine-client.exe setup --interactive. No Sunshine process or firewall rule was changed.'
 } catch {
     $original = $_
     # Restore an overwritten program; remove only directories created here.

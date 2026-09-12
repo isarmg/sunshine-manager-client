@@ -24,8 +24,6 @@ def main():
         for directory in ['DEBIAN', 'opt/sunshine-client', 'usr/bin', 'usr/lib/systemd/system', 'usr/share/doc/sunshine-client']:
             (stage / directory).mkdir(parents=True)
         shutil.copy2(args.binary, stage / 'opt/sunshine-client/sunshine-client')
-        shutil.copy2(ROOT / 'deploy/configure-linux.py', stage / 'usr/bin/sunshine-client-setup')
-        (stage / 'usr/bin/sunshine-client-setup').chmod(0o755)
         (stage / 'usr/bin/sunshine-client').symlink_to('/opt/sunshine-client/sunshine-client')
         shutil.copy2(ROOT / 'deploy/sunshine-client.service', stage / 'usr/lib/systemd/system/sunshine-client.service')
         shutil.copy2(ROOT / 'LICENSE-APACHE', stage / 'usr/share/doc/sunshine-client/copyright')
@@ -33,11 +31,11 @@ def main():
 Version: {version}
 Architecture: amd64
 Maintainer: sarmg <maintainers@sarmg.org>
-Depends: libc6 (>= 2.39), libgcc-s1, libssl3t64, ca-certificates, python3, systemd, passwd
+Depends: libc6 (>= 2.39), libgcc-s1, libssl3t64, ca-certificates, systemd, passwd
 Section: admin
 Priority: optional
 Description: Sunshine management client
- Run sudo sunshine-client pair --interactive after installation.
+ Run sudo sunshine-client setup after installation.
  No video forwarding, inbound listener or changes to Sunshine.
 ''')
         scripts = {
@@ -70,7 +68,11 @@ if [ "$1" = configure ]; then
   systemctl start sunshine-client.service
   rm /run/sunshine-client-package-was-active
  fi
- echo 'Pair: sudo sunshine-client pair --interactive; then sudo sunshine-client service enable --now'
+ if [ -t 0 ] && [ -t 1 ]; then
+  if ! /usr/bin/sunshine-client setup; then echo 'Setup was not completed; installation and pairing progress were retained.' >&2; fi
+ else
+  echo 'No interactive terminal was available; resume with: sudo sunshine-client setup'
+ fi
 fi
 ''',
             'prerm': '''#!/bin/sh

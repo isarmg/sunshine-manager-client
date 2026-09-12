@@ -17,8 +17,8 @@
           <RemoveRegistryValue Id="RemoveLegacyTrayRun" Root="HKLM" Key="Software\Microsoft\Windows\CurrentVersion\Run" Name="SunshineClientTray" />
           <RemoveFile Id="RemoveLegacyTrayFile" Name="sunshine-client-tray.exe" On="install" />
           <RemoveFile Id="RemoveLegacyTrayShortcut" Directory="ProgramMenuFolder" Name="Sunshine Client.lnk" On="install" />
-          <ServiceInstall Id="ServiceInstall" Name="SunshineClient" DisplayName="Sunshine Client" Description="Sunshine management only; configure pairing using sunshine-client pair." Type="ownProcess" Start="demand" ErrorControl="normal" Arguments="--windows-service --state &quot;[CommonAppDataFolder]SunshineClient&quot;" />
-          <!-- Do not start until the administrator has completed local pairing setup. -->
+          <ServiceInstall Id="ServiceInstall" Name="SunshineClient" DisplayName="Sunshine Client" Description="Sunshine management only; configure with sunshine-client setup." Type="ownProcess" Start="demand" ErrorControl="normal" Arguments="--windows-service --state &quot;[CommonAppDataFolder]SunshineClient&quot;" />
+          <!-- Do not start until the administrator has completed local setup. -->
           <ServiceControl Id="ServiceControl" Name="SunshineClient" Stop="both" Remove="uninstall" Wait="yes" />
         </Component>
       </Directory>
@@ -26,5 +26,14 @@
     <StandardDirectory Id="CommonAppDataFolder" />
     <StandardDirectory Id="ProgramMenuFolder" />
     <Feature Id="Complete" Title="Sunshine Client" Level="1"><ComponentRef Id="ClientService" /></Feature>
+    <!--
+      Normal MSI installs hand the terminal to the installed CLI after the
+      transaction commits. Silent/automation installs skip this action and
+      can resume with sunshine-client setup without losing installed state.
+    -->
+    <CustomAction Id="LaunchInteractiveSetup" FileRef="ClientExe" ExeCommand="setup --interactive" Execute="immediate" Impersonate="yes" Return="ignore" />
+    <InstallExecuteSequence>
+      <Custom Action="LaunchInteractiveSetup" After="InstallFinalize" Condition="NOT Installed AND NOT REMOVE~=&quot;ALL&quot; AND UILevel &gt;= 4" />
+    </InstallExecuteSequence>
   </Package>
 </Wix>

@@ -48,7 +48,6 @@ def verify(archive, destination, sha):
     if checksum != f"{digest(archive)}  {archive.name}":
         raise ValueError("archive digest mismatch")
     allowed = {"sunshine-client.exe" if windows else "sunshine-client", "README.md", "platform-setup.md", "LICENSE", "manifest.json", "SHA256SUMS", "bootstrap.example.json"}
-    allowed.update(["install-windows.ps1", "uninstall-windows.ps1"] if windows else ["repair-existing.sh", "install-macos.sh", "uninstall-macos.sh", "org.sarmg.sunshine-client.plist"] if macos else ["repair-existing.sh", "install-linux.sh", "uninstall-linux.sh", "sunshine-client.service"])
     root = destination / name
     root.mkdir()
     seen = set()
@@ -109,6 +108,8 @@ def install_test(root, binary, temporary, installer=None, seed=None):
     # This test intentionally creates a real service/account, but never on a user's host.
     if os.environ.get("GITHUB_ACTIONS") != "true" or os.environ.get("RUNNER_ENVIRONMENT") != "github-hosted":
         raise ValueError("--install is restricted to disposable GitHub-hosted runners")
+    if installer is None:
+        raise ValueError("--install requires the native platform installer")
     windows = platform.system() == "Windows"
     ca = temporary / "ca.pem"
     subprocess.run(["openssl", "req", "-x509", "-newkey", "rsa:2048", "-nodes", "-keyout", str(temporary / "key.pem"), "-out", str(ca), "-days", "1", "-subj", "/CN=Client installation test", "-addext", "basicConstraints=critical,CA:TRUE", "-addext", "subjectAltName=IP:127.0.0.1"], check=True, stdout=subprocess.DEVNULL, stderr=subprocess.DEVNULL)
@@ -138,21 +139,16 @@ foreach($path in @('{escaped}', '{escaped}\\bootstrap.json')) {{
   Set-Acl -LiteralPath $path -AclObject $acl
 }}
 """)
-        install = ["powershell.exe", "-NoProfile", "-NonInteractive", "-ExecutionPolicy", "Bypass", "-File", str(root / "install-windows.ps1"), "-Binary", str(binary), "-Bootstrap", str(bootstrap)]
-        if installer:
-            subprocess.run(['msiexec.exe', '/i', str(installer), '/qn', '/norestart'], check=True)
-            installed = Path(os.environ['ProgramFiles']) / 'SunshineClient'
-            if (installed / 'sunshine-client-tray.exe').exists():
-                raise ValueError('CLI installer contains a tray executable')
-            subprocess.run([str(installed / 'sunshine-client.exe'), 'init', '--state', str(Path(os.environ['ProgramData']) / 'SunshineClient'), '--bootstrap', str(bootstrap)], check=True, timeout=60)
-            if powershell("(Get-Service SunshineClient).Status") != 'Stopped':
-                raise ValueError('unpaired service was started by installer')
-
-        else:
-            subprocess.run(install, check=True, env=powershell_environment())
+        subprocess.run(['msiexec.exe', '/i', str(installer), '/qn', '/norestart'], check=True)
+        installed = Path(os.environ['ProgramFiles']) / 'SunshineClient'
+        if (installed / 'sunshine-client-tray.exe').exists():
+            raise ValueError('CLI installer contains a tray executable')
+        subprocess.run([str(installed / 'sunshine-client.exe'), 'init', '--state', str(Path(os.environ['ProgramData']) / 'SunshineClient'), '--bootstrap', str(bootstrap)], check=True, timeout=60)
+        if powershell("(Get-Service SunshineClient).Status") != 'Stopped':
+            raise ValueError('unpaired service was started by installer')
         state_file = Path(os.environ['ProgramData']) / 'SunshineClient/provisioning/state.sqlite3'
         before = state_file.read_bytes()
-        subprocess.run(install, check=True, env=powershell_environment())
+        subprocess.run(['msiexec.exe', '/i', str(installer), '/qn', '/norestart'], check=True)
         if state_file.read_bytes() != before:
             raise ValueError("repair changed existing protected state")
 
@@ -162,24 +158,16 @@ foreach($path in @('{escaped}', '{escaped}\\bootstrap.json')) {{
             subprocess.run(['msiexec.exe', '/x', str(installer), '/qn', '/norestart'], check=True)
             if (installed / 'sunshine-client-tray.exe').exists():
                 raise ValueError('MSI uninstall retained tray executable')
-        else:
-            subprocess.run(["powershell.exe", "-NoProfile", "-NonInteractive", "-ExecutionPolicy", "Bypass", "-File", str(root / "uninstall-windows.ps1")], check=True, env=powershell_environment())
         if not (Path(os.environ["ProgramData"]) / "SunshineClient/provisioning/state.sqlite3").is_file():
             raise ValueError("uninstall removed protected state")
     else:
-        install = ["bash", str(root / "install-linux.sh"), str(binary), str(bootstrap)]
-        if installer:
-            subprocess.run(['dpkg', '--install', str(installer)], check=True)
-            # Offline installation is separate from successful online pairing.
-            subprocess.run([str(binary), 'init', '--state', '/var/lib/sunshine-client', '--bootstrap', str(bootstrap)], check=True)
-            subprocess.run(['chown', '-R', 'sunshine-client:sunshine-client', '/var/lib/sunshine-client'], check=True)
-        else:
-            subprocess.run(install, check=True)
+        subprocess.run(['dpkg', '--install', str(installer)], check=True)
+        # Offline installation is separate from successful online pairing.
+        subprocess.run([str(binary), 'init', '--state', '/var/lib/sunshine-client', '--bootstrap', str(bootstrap)], check=True)
+        subprocess.run(['chown', '-R', 'sunshine-client:sunshine-client', '/var/lib/sunshine-client'], check=True)
         state_file = Path('/var/lib/sunshine-client/provisioning/bootstrap.json')
         before = state_file.read_bytes()
-        subprocess.run(install, check=True)
-        if installer:
-            subprocess.run(['dpkg', '--install', str(installer)], check=True)
+        subprocess.run(['dpkg', '--install', str(installer)], check=True)
         if state_file.read_bytes() != before:
             raise ValueError("repair changed existing protected state")
         if subprocess.run(["systemctl", "is-active", "--quiet", "sunshine-client.service"]).returncode == 0:
@@ -194,10 +182,7 @@ foreach($path in @('{escaped}', '{escaped}\\bootstrap.json')) {{
             raise ValueError("protected pending configuration missing")
         if seed:
             exercise_native_service(Path('/opt/sunshine-client/sunshine-client'), seed, Path('/var/lib/sunshine-client'), 'sunshine-client:sunshine-client')
-        if installer:
-            subprocess.run(['dpkg', '--remove', 'sunshine-client'], check=True)
-        else:
-            subprocess.run(["bash", str(root / "uninstall-linux.sh")], check=True)
+        subprocess.run(['dpkg', '--remove', 'sunshine-client'], check=True)
         if not (state / "bootstrap.json").is_file():
             raise ValueError("uninstall removed protected state")
     print("Native offline install, explicit-start policy, program replacement and state-preserving uninstall passed; online service behavior requires enrolled-device acceptance.")

@@ -221,16 +221,261 @@ fn document<T: serde::de::DeserializeOwned + Send + 'static>(args: &Args) -> Res
         Err(fail(2, "protected_input_required"))
     }
 }
+
+fn ask_yes_no(label: &str, default: bool) -> Result<bool> {
+    let value = prompt(
+        &format!("{label} [{}]", if default { "yes" } else { "no" }),
+        false,
+    )?;
+    match value.trim().to_ascii_lowercase().as_str() {
+        "" => Ok(default),
+        "y" | "yes" | "true" | "1" => Ok(true),
+        "n" | "no" | "false" | "0" => Ok(false),
+        _ => Err(fail(2, "invalid_confirmation")),
+    }
+}
+
+fn setup_args(args: &Args, words: Vec<String>, interactive: bool) -> Args {
+    let mut options = args.options.clone();
+    if interactive {
+        options.insert("--interactive".into(), "true".into());
+    }
+    Args {
+        words,
+        options,
+        format: args.format.clone(),
+        timeout: args.timeout,
+    }
+}
+
+fn setup_service_args(args: &Args, now: bool) -> Args {
+    let mut options = args.options.clone();
+    options.remove("--interactive");
+    options.remove("--input-stdin");
+    options.remove("--server");
+    options.remove("--now");
+    if now {
+        options.insert("--now".into(), "true".into());
+    }
+    Args {
+        words: vec![],
+        options,
+        format: args.format.clone(),
+        timeout: args.timeout,
+    }
+}
+
+fn preserve_setup_commit(mut error: Failure, pairing: &Value) -> Failure {
+    error.committed = true;
+    if error.transaction_id.is_none() {
+        error.transaction_id = pairing["pairing"]["transaction_id"]
+            .as_str()
+            .or_else(|| pairing["transaction_id"].as_str())
+            .map(str::to_owned);
+    }
+    error
+}
+
+fn wait_for_healthy(path: &Path, timeout: std::time::Duration) -> Result<Value> {
+    let deadline = std::time::Instant::now() + timeout;
+    loop {
+        let status = local_status(path)?;
+        if status["health"] == "healthy" {
+            return Ok(status);
+        }
+        if std::time::Instant::now() >= deadline {
+            return Err(fail(9, "connection_unconfirmed"));
+        }
+        std::thread::sleep(std::time::Duration::from_secs(1));
+    }
+}
+
+fn execute_pair(args: &Args, path: &Path) -> Result<Value> {
+    let words: Vec<_> = args.words.iter().map(String::as_str).collect();
+    args.validate_options(&["--interactive", "--input-stdin", "--server"])?;
+    let resume = words == ["pair", "resume"];
+    if resume && (args.has("--interactive") || args.has("--input-stdin") || args.has("--server")) {
+        return Err(fail(2, "resume_uses_existing_transaction"));
+    }
+    let incoming = if args.has("--interactive") {
+        Some(
+            PairInput {
+                server: if let Some(s) = args.get("--server") {
+                    s.into()
+                } else {
+                    prompt("Server HTTPS origin", false)?
+                },
+                pairing_code: Zeroizing::new(prompt("Pairing code", true)?),
+                sunshine_endpoint: prompt("Local Sunshine HTTPS URL", false)?,
+                sunshine_username: Zeroizing::new(prompt("Sunshine username", false)?),
+                sunshine_password: Zeroizing::new(prompt("Sunshine password", true)?),
+                restart_allowed: prompt("Allow controlled restart? [no]", false)? == "yes",
+            }
+            .bootstrap()?,
+        )
+    } else if args.has("--input-stdin") {
+        let input: PairInput = stdin_document(args.timeout)?;
+        if args.get("--server").is_some_and(|s| s != input.server) {
+            return Err(fail(2, "server_input_mismatch"));
+        }
+        Some(input.bootstrap()?)
+    } else {
+        None
+    };
+    let _guard = MaintenanceGuard::acquire(path).map_err(storage_error)?;
+    let store = ProtectedState::open(&path.join("provisioning")).map_err(storage_error)?;
+    let existing = identity(&store)?;
+    if resume && existing.is_none() {
+        return Err(fail(4, "no_pairing_transaction"));
+    }
+    if let Some(b) = incoming {
+        if let Some(id) = existing {
+            if id.enrolled || id.config != b {
+                return Err(fail(5, "binding_replacement_requires_retirement"));
+            }
+        } else if b.enrollment_token.is_empty() {
+            store
+                .put(
+                    "local-settings.json",
+                    &serde_json::to_vec(&settings(&b)).map_err(storage_error)?,
+                )
+                .map_err(storage_error)?;
+        } else {
+            store
+                .put(
+                    "bootstrap.json",
+                    &Zeroizing::new(serde_json::to_vec(&b).map_err(storage_error)?),
+                )
+                .map_err(storage_error)?;
+        }
+    } else if !resume
+        && store
+            .read("bootstrap.json")
+            .map_err(storage_error)?
+            .is_none()
+    {
+        return Err(fail(2, "protected_input_required"));
+    }
+    drop(store);
+    let rt = tokio::runtime::Runtime::new().map_err(storage_error)?;
+    let result = rt.block_on(async {
+        tokio::select! {
+            r = tokio::time::timeout(args.timeout, provisioning::pair(path)) =>
+                r.map_err(|_| fail(9, "pairing_result_uncertain"))?.map_err(provision_error),
+            _ = tokio::signal::ctrl_c() => Err(fail(130, "interrupted_resume_required")),
+        }
+    });
+    result.map_err(|mut error| {
+        if let Ok(store) = ProtectedState::open_readonly(&path.join("provisioning"))
+            && let Ok(Some(saved)) = identity(&store)
+        {
+            error.transaction_id = Some(saved.binding.installation_id.to_string());
+            error.committed |= saved.enrolled;
+            if saved.enrolled && error.exit != 130 {
+                error.exit = 11;
+            }
+        }
+        error
+    })?;
+    local_status(path)
+}
+
+fn setup(args: &Args, path: PathBuf) -> Result<Value> {
+    if path != service().default_config {
+        return Err(fail(2, "service_config_mismatch"));
+    }
+    let existing = match read_store(&path)? {
+        Some(store) => identity(&store)?,
+        None => None,
+    };
+    let pairing = if existing.as_ref().is_some_and(|id| id.enrolled) {
+        json!({"committed":true,"already_active":true})
+    } else {
+        let has_protected_input = args.has("--input-stdin") || args.has("--interactive");
+        let resume = existing.is_some()
+            && !has_protected_input
+            && args.get("--server").is_none()
+            && !args.has("--non-interactive");
+        let pair_words = if resume {
+            vec!["pair".into(), "resume".into()]
+        } else {
+            vec!["pair".into()]
+        };
+        let interactive = !resume && !args.has("--input-stdin") && !args.has("--non-interactive");
+        execute_pair(&setup_args(args, pair_words, interactive), &path)?
+    };
+    let interactive = !args.has("--non-interactive") && !args.has("--input-stdin");
+    let (enable, start, verify) = if interactive {
+        (
+            ask_yes_no("Enable service at system startup?", true)
+                .map_err(|error| preserve_setup_commit(error, &pairing))?,
+            ask_yes_no("Start the service now?", true)
+                .map_err(|error| preserve_setup_commit(error, &pairing))?,
+            ask_yes_no("Verify the connection now?", true)
+                .map_err(|error| preserve_setup_commit(error, &pairing))?,
+        )
+    } else {
+        (true, true, true)
+    };
+    let service_result = if enable {
+        service()
+            .change(&setup_service_args(args, start), "enable", &path)
+            .map_err(|error| preserve_setup_commit(error, &pairing))?
+    } else if start {
+        service()
+            .change(&setup_service_args(args, false), "start", &path)
+            .map_err(|error| preserve_setup_commit(error, &pairing))?
+    } else {
+        service()
+            .status(args.timeout)
+            .map_err(|error| preserve_setup_commit(error, &pairing))?
+    };
+    let verification = if verify && service_result["state"] == "running" {
+        wait_for_healthy(&path, args.timeout)
+            .map_err(|error| preserve_setup_commit(error, &pairing))?
+    } else {
+        json!({"state":"skipped","reason":if verify {"service_not_running"} else {"not_requested"}})
+    };
+    Ok(json!({
+        "setup":"completed",
+        "pairing":pairing,
+        "service":service_result,
+        "verification":verification
+    }))
+}
+
+fn no_args(args: &Args) -> u8 {
+    let status_args = Args {
+        words: vec!["status".into()],
+        options: args.options.clone(),
+        format: args.format.clone(),
+        timeout: args.timeout,
+    };
+    let mut result = execute(&status_args);
+    if let Ok(value) = &mut result {
+        value["next_steps"] = json!([
+            "sunshine-client setup",
+            "sunshine-client status",
+            "sunshine-client service status",
+            "sunshine-client logs"
+        ]);
+    }
+    emit("sunshine-client", "status", &args.format, &result)
+}
+
 pub fn entry(raw: Vec<String>) -> u8 {
     let args = match Args::parse(raw) {
         Ok(a) => a,
         Err(e) => return emit("sunshine-client", "parse", "json", &Err(e)),
     };
-    if args.has("--help") || args.words.is_empty() && !args.has("--version") {
+    if args.has("--help") {
         println!(
-            "sunshine-client: config init|show|validate|diff|apply; pair [status|resume]; credentials update; status; doctor; service status|start|stop|restart|enable|disable; run; version\nGlobal: --format human|json|ndjson --non-interactive --timeout 60s --no-color --config ABSOLUTE_STATE_DIRECTORY (--state compatibility alias)\nPair: --interactive or --input-stdin; no secret arguments. Configuration apply requires --expected-revision. Services must be stopped for writes."
+            "sunshine-client: setup; config init|show|validate|diff|apply; pair [status|resume]; credentials update; status; doctor; service status|start|stop|restart|enable|disable; run; version\nGlobal: --format human|json|ndjson --non-interactive --timeout 60s --no-color --config ABSOLUTE_STATE_DIRECTORY (--state compatibility alias)\nsetup/pair uses --interactive or --input-stdin; setup completes pairing, service startup policy and connection verification. No secret arguments. Configuration apply requires --expected-revision. Services must be stopped for writes."
         );
         return 0;
+    }
+    if args.words.is_empty() && !args.has("--version") {
+        return no_args(&args);
     }
     if (args.has("--version") || args.words == ["version"]) && args.format == "human" {
         println!(
@@ -286,6 +531,10 @@ fn execute(args: &Args) -> Result<Value> {
         .map(PathBuf::from)
         .unwrap_or_else(default_state);
     match words.as_slice() {
+        ["setup"] => {
+            args.validate_options(&["--interactive", "--input-stdin", "--server"])?;
+            setup(args, path)
+        }
         ["tasks", "list"] => {
             args.validate_options(&[])?;
             crate::journal::inspect(&path.join("journal"), None).map_err(storage_error)
@@ -478,90 +727,7 @@ fn execute(args: &Args) -> Result<Value> {
                 .map_err(storage_error)?;
             Ok(json!({"imported":true,"next_step":"pair explicitly before starting service"}))
         }
-        ["pair"] | ["pair", "resume"] => {
-            args.validate_options(&["--interactive", "--input-stdin", "--server"])?;
-            let resume = words == ["pair", "resume"];
-            if resume
-                && (args.has("--interactive") || args.has("--input-stdin") || args.has("--server"))
-            {
-                return Err(fail(2, "resume_uses_existing_transaction"));
-            }
-            let incoming = if args.has("--interactive") {
-                Some(
-                    PairInput {
-                        server: if let Some(s) = args.get("--server") {
-                            s.into()
-                        } else {
-                            prompt("Server HTTPS origin", false)?
-                        },
-                        pairing_code: Zeroizing::new(prompt("Pairing code", true)?),
-                        sunshine_endpoint: prompt("Local Sunshine HTTPS URL", false)?,
-                        sunshine_username: Zeroizing::new(prompt("Sunshine username", false)?),
-                        sunshine_password: Zeroizing::new(prompt("Sunshine password", true)?),
-                        restart_allowed: prompt("Allow controlled restart? [no]", false)? == "yes",
-                    }
-                    .bootstrap()?,
-                )
-            } else if args.has("--input-stdin") {
-                let input: PairInput = stdin_document(args.timeout)?;
-                if args.get("--server").is_some_and(|s| s != input.server) {
-                    return Err(fail(2, "server_input_mismatch"));
-                }
-                Some(input.bootstrap()?)
-            } else {
-                None
-            };
-            let _guard = MaintenanceGuard::acquire(&path).map_err(storage_error)?;
-            let store = ProtectedState::open(&path.join("provisioning")).map_err(storage_error)?;
-            let existing = identity(&store)?;
-            if resume && existing.is_none() {
-                return Err(fail(4, "no_pairing_transaction"));
-            }
-            if let Some(b) = incoming {
-                if let Some(id) = existing {
-                    if id.enrolled || id.config != b {
-                        return Err(fail(5, "binding_replacement_requires_retirement"));
-                    }
-                } else if b.enrollment_token.is_empty() {
-                    store
-                        .put(
-                            "local-settings.json",
-                            &serde_json::to_vec(&settings(&b)).map_err(storage_error)?,
-                        )
-                        .map_err(storage_error)?;
-                } else {
-                    store
-                        .put(
-                            "bootstrap.json",
-                            &Zeroizing::new(serde_json::to_vec(&b).map_err(storage_error)?),
-                        )
-                        .map_err(storage_error)?;
-                }
-            } else if !resume
-                && store
-                    .read("bootstrap.json")
-                    .map_err(storage_error)?
-                    .is_none()
-            {
-                return Err(fail(2, "protected_input_required"));
-            }
-            drop(store);
-            let rt = tokio::runtime::Runtime::new().map_err(storage_error)?;
-            let result = rt.block_on(async {tokio::select! {r=tokio::time::timeout(args.timeout,provisioning::pair(&path))=>r.map_err(|_|fail(9,"pairing_result_uncertain"))?.map_err(provision_error),_=tokio::signal::ctrl_c()=>Err(fail(130,"interrupted_resume_required"))}});
-            result.map_err(|mut error| {
-                if let Ok(store) = ProtectedState::open_readonly(&path.join("provisioning"))
-                    && let Ok(Some(saved)) = identity(&store)
-                {
-                    error.transaction_id = Some(saved.binding.installation_id.to_string());
-                    error.committed |= saved.enrolled;
-                    if saved.enrolled && error.exit != 130 {
-                        error.exit = 11;
-                    }
-                }
-                error
-            })?;
-            local_status(&path)
-        }
+        ["pair"] | ["pair", "resume"] => execute_pair(args, &path),
         ["run"] => {
             args.validate_options(&[])?;
             run(&path)?;

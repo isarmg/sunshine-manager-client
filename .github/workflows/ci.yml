@@ -131,6 +131,9 @@ jobs:
           cargo test --locked
           cargo clippy --locked --all-targets -- -D warnings
           plutil -lint deploy/macos/org.sarmg.sunshine-client.plist
+          sh -n packaging/macos/build-pkg.sh
+          sh -n packaging/macos/scripts/preinstall
+          sh -n packaging/macos/scripts/postinstall
           sh -n deploy/macos/install-macos.sh
           sh -n deploy/macos/uninstall-macos.sh
       - name: Build native CLI and disposable acceptance fixture
@@ -150,11 +153,17 @@ jobs:
           sudo cmp "$RUNNER_TEMP/identity-before-reinstall.json" "/Library/Application Support/sunshine-client/provisioning/identity.json"
           sudo sh deploy/macos/install-macos.sh "$PWD/target/release/sunshine-client"
           sudo sh deploy/macos/uninstall-macos.sh
-      - name: Package and independently verify the native Mac archive
+      - name: Package and independently verify the native Mac archive and PKG
         run: |
           python3 scripts/package-client.py --output "$RUNNER_TEMP/client-output"
           archives=("$RUNNER_TEMP"/client-output/*.tar.gz)
           test "${#archives[@]}" = 1
+          packages=("$RUNNER_TEMP"/client-output/*.pkg)
+          test "${#packages[@]}" = 1
+          sudo installer -pkg "${packages[0]}" -target /
+          sudo test -x /usr/local/libexec/sunshine-client
+          if sudo launchctl print system/org.sarmg.sunshine-client >/dev/null 2>&1; then exit 1; fi
+          sudo sh deploy/macos/uninstall-macos.sh
           python3 scripts/check-client-package.py --archive "${archives[0]}" --sha "$GITHUB_SHA"
       - name: Retain verified native Mac archive
         uses: actions/upload-artifact@043fb46d1a93c77aae656e7c1c64a875d1fc6a0a # v7.0.1

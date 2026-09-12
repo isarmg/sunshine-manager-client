@@ -40,7 +40,6 @@ class PackageTests(unittest.TestCase):
         target = mac_target or ("x86_64-pc-windows-msvc" if windows else "x86_64-unknown-linux-gnu")
         name = f"sunshine-client-{VERSION}-{target}"
         names = ["sunshine-client.exe" if windows else "sunshine-client", "README.md", "platform-setup.md", "LICENSE", "bootstrap.example.json"]
-        names += ["install-windows.ps1", "uninstall-windows.ps1"] if windows else ["repair-existing.sh", "install-macos.sh", "uninstall-macos.sh", "org.sarmg.sunshine-client.plist"] if mac_target else ["repair-existing.sh", "install-linux.sh", "uninstall-linux.sh", "sunshine-client.service"]
         files = {n: b"fixture" for n in names}
         hashes = {n: hashlib.sha256(b).hexdigest() for n, b in files.items()}
         manifest = {"product": "sunshine-client", "version": VERSION, "source_commit": "b" * 40 if wrong_sha else SHA, "target": target, "protocol": "sunshine-management/1", "authenticode_signed": False, "files": hashes}
