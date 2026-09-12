@@ -58,7 +58,10 @@ class InstallerTests(unittest.TestCase):
         self.assertTrue(preinstall.is_file())
         self.assertTrue(postinstall.is_file())
         self.assertIn('pkgbuild', builder.read_text())
-        self.assertIn('setup --interactive', postinstall.read_text())
+        postinstall_text = postinstall.read_text()
+        self.assertIn('setup --interactive', postinstall_text)
+        self.assertIn('/private/etc/newsyslog.d', postinstall_text)
+        self.assertIn('/private/var/run', postinstall_text)
         self.assertNotIn('install-macos.sh', builder.read_text())
         for script in (builder, preinstall, postinstall):
             subprocess.run(['sh', '-n', str(script)], check=True)

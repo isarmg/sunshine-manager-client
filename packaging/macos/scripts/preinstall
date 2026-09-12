@@ -7,9 +7,12 @@ state='/Library/Application Support/sunshine-client'
 plist='/Library/LaunchDaemons/org.sarmg.sunshine-client.plist'
 binary='/usr/local/libexec/sunshine-client'
 link='/usr/local/bin/sunshine-client'
-marker='/var/run/org.sarmg.sunshine-client.was-loaded'
+marker='/private/var/run/org.sarmg.sunshine-client.was-loaded'
 
-for path in /Library /Library/LaunchDaemons "/Library/Application Support" /usr/local /usr/local/bin /usr/local/libexec /var/run; do
+# macOS exposes /var/run through an OS-managed alias. Validate the physical
+# directory so the package does not reject the platform's normal filesystem
+# layout while still refusing a redirected runtime directory.
+for path in /Library /Library/LaunchDaemons "/Library/Application Support" /usr/local /usr/local/bin /usr/local/libexec /private/var/run; do
   [ ! -L "$path" ] || { echo "Refusing symlinked package root: $path" >&2; exit 8; }
 done
 if [ -e "$state" ] || [ -L "$state" ]; then

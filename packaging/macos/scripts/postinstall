@@ -9,11 +9,14 @@ state='/Library/Application Support/sunshine-client'
 plist='/Library/LaunchDaemons/org.sarmg.sunshine-client.plist'
 binary='/usr/local/libexec/sunshine-client'
 link='/usr/local/bin/sunshine-client'
-log='/var/log/sunshine-client.log'
-rotation='/etc/newsyslog.d/sunshine-client.conf'
-marker='/var/run/org.sarmg.sunshine-client.was-loaded'
+log='/private/var/log/sunshine-client.log'
+rotation='/private/etc/newsyslog.d/sunshine-client.conf'
+marker='/private/var/run/org.sarmg.sunshine-client.was-loaded'
 
-for path in /Library /Library/LaunchDaemons "/Library/Application Support" /usr/local /usr/local/bin /usr/local/libexec /etc /etc/newsyslog.d /var/log /var/run; do
+# /etc and /var are OS-managed aliases on macOS. Validate their physical
+# locations rather than rejecting a normal installation for using those
+# documented aliases in the launchd plist and newsyslog entry.
+for path in /Library /Library/LaunchDaemons "/Library/Application Support" /usr/local /usr/local/bin /usr/local/libexec /private/etc /private/etc/newsyslog.d /private/var/log /private/var/run; do
   [ ! -L "$path" ] || exit 8
   if [ -d "$path" ]; then
     [ "$(stat -f %u "$path")" = 0 ] || exit 8
@@ -91,7 +94,7 @@ if [ -e "$rotation" ] || [ -L "$rotation" ]; then
   [ -f "$rotation" ] && [ ! -L "$rotation" ] || exit 8
   [ "$(cat "$rotation")" = "$expected_rotation" ] || exit 8
 else
-  rotation_tmp="/etc/newsyslog.d/.sunshine-client.conf.$$"
+  rotation_tmp="/private/etc/newsyslog.d/.sunshine-client.conf.$$"
   [ ! -e "$rotation_tmp" ] && [ ! -L "$rotation_tmp" ] || exit 8
   (umask 022; set -C; printf '%s\n' "$expected_rotation" > "$rotation_tmp")
   chown root:wheel "$rotation_tmp"
