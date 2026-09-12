@@ -160,7 +160,11 @@ jobs:
           test "${#archives[@]}" = 1
           packages=("$RUNNER_TEMP"/client-output/*.pkg)
           test "${#packages[@]}" = 1
-          sudo installer -pkg "${packages[0]}" -target /
+          if ! sudo installer -verboseR -pkg "${packages[0]}" -target /; then
+            sudo tail -n 200 /var/log/install.log || true
+            sudo log show --last 5m --style compact --predicate 'process == "installer"' || true
+            exit 1
+          fi
           sudo test -x /usr/local/libexec/sunshine-client
           if sudo launchctl print system/org.sarmg.sunshine-client >/dev/null 2>&1; then exit 1; fi
           sudo sh deploy/macos/uninstall-macos.sh
