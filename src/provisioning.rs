@@ -11,7 +11,7 @@ use sarmg_client_secure_http::{NetworkPolicy, ResponseBudget, SecureHttpClient, 
 use serde::{Deserialize, Serialize};
 use std::{path::Path, sync::Arc, time::Duration};
 use sunshine_client_protocol::{
-    Binding, Capabilities, ClientOs, Effectiveness, PROTOCOL, config::FIELDS,
+    Binding, Capabilities, ClientOs, Effectiveness, PROTOCOL, SUNSHINE_VERSION, config::FIELDS,
 };
 use tokio::sync::watch;
 use uuid::Uuid;
@@ -35,6 +35,12 @@ pub(crate) struct Identity {
     pub(crate) credential: Zeroizing<String>,
     pub(crate) config: Bootstrap,
     pub(crate) enrolled: bool,
+    #[serde(default = "current_sunshine_version")]
+    pub(crate) sunshine_version: String,
+}
+
+fn current_sunshine_version() -> String {
+    SUNSHINE_VERSION.to_owned()
 }
 #[derive(Debug, thiserror::Error)]
 pub enum ProvisionError {
@@ -154,7 +160,10 @@ async fn resolve_pairing(config: &Bootstrap) -> Result<PairingTarget, ProvisionE
     Ok(target)
 }
 /// Persist independent random identity before enrollment. Never regenerate on retry.
-async fn provision(store: &ProtectedState) -> Result<Identity, ProvisionError> {
+async fn provision(
+    store: &ProtectedState,
+    observed_sunshine_version: &str,
+) -> Result<Identity, ProvisionError> {
     let mut identity = if let Some(bytes) = store.read("identity.json")? {
         serde_json::from_slice::<Identity>(&Zeroizing::new(bytes)).map_err(config_error)?
     } else {
@@ -178,6 +187,7 @@ async fn provision(store: &ProtectedState) -> Result<Identity, ProvisionError> {
             credential,
             config,
             enrolled: false,
+            sunshine_version: observed_sunshine_version.to_owned(),
         };
         value.persist(store)?;
         value
@@ -233,6 +243,7 @@ async fn provision(store: &ProtectedState) -> Result<Identity, ProvisionError> {
         return Err(ProvisionError::Configuration);
     }
     identity.enrolled = true;
+    identity.sunshine_version = observed_sunshine_version.to_owned();
     identity.config.enrollment_token.clear();
     identity.persist(store)?;
     store.put("bootstrap.json", b"{}")?;
@@ -256,7 +267,7 @@ pub async fn pair(state_path: &Path) -> Result<(), ProvisionError> {
         ))
         .map_err(config_error)?
     };
-    config
+    let sunshine_version = config
         .adapter()?
         .read()
         .await
@@ -265,8 +276,10 @@ pub async fn pair(state_path: &Path) -> Result<(), ProvisionError> {
             crate::adapter::AdapterError::UnsupportedVersion => ProvisionError::Unsupported,
             crate::adapter::AdapterError::UnsafeConfiguration
             | crate::adapter::AdapterError::InvalidLocalEndpoint => ProvisionError::Configuration,
-        })?;
-    provision(&store).await?;
+        })?
+        .sunshine_version()
+        .to_owned();
+    provision(&store, &sunshine_version).await?;
     Ok(())
 }
 pub async fn run(state_path: &Path, shutdown: watch::Receiver<bool>) -> Result<(), ProvisionError> {
@@ -298,26 +311,13 @@ pub async fn run(state_path: &Path, shutdown: watch::Receiver<bool>) -> Result<(
         identity.config.adapter()?,
         journal,
     ));
-    let sunshine_version = identity
-        .config
-        .adapter()?
-        .read()
-        .await
-        .map_err(|error| match error {
-            crate::adapter::AdapterError::Unavailable => ProvisionError::Unavailable,
-            crate::adapter::AdapterError::UnsupportedVersion => ProvisionError::Unsupported,
-            crate::adapter::AdapterError::UnsafeConfiguration
-            | crate::adapter::AdapterError::InvalidLocalEndpoint => ProvisionError::Configuration,
-        })?
-        .sunshine_version()
-        .to_owned();
     let connection =
         ManagerConnection::new(&identity.config.manager_endpoint, identity.credential, &[])?;
     let capabilities = Capabilities {
         protocol: PROTOCOL.into(),
         client_version: env!("CARGO_PKG_VERSION").into(),
         os: client_os()?,
-        sunshine_version,
+        sunshine_version: identity.sunshine_version,
         restart_allowed: identity.config.restart_allowed,
         managed_fields: FIELDS.iter().map(|s| s.to_string()).collect(),
     };
