@@ -4,11 +4,11 @@ use async_trait::async_trait;
 use base64::{Engine as _, engine::general_purpose::STANDARD};
 use reqwest::{Method, Request, header};
 use sarmg_client_secure_http::{
-    Certificate, NetworkPolicy, ResponseBudget, SecureHttpClient, TlsConfig, Url,
+    Certificate, NetworkPolicy, ResponseBudget, SecureHttpClient, TlsConfig, TrustMode, Url,
 };
 use serde_json::Value;
 use sha2::{Digest, Sha256};
-use sunshine_client_protocol::{ConfigSnapshot, Effectiveness, SUNSHINE_VERSION, config::FIELDS};
+use sunshine_client_protocol::{ConfigSnapshot, Effectiveness, config::FIELDS};
 use zeroize::Zeroizing;
 
 pub const MAX_CONFIG_BYTES: usize = 512 * 1024;
@@ -29,6 +29,7 @@ pub enum AdapterError {
 /// Full configuration stays on the Client. Deliberately not Debug or Serialize.
 #[derive(Clone, PartialEq, Eq)]
 pub struct Configuration {
+    sunshine_version: String,
     fields: BTreeMap<String, String>,
 }
 
@@ -41,7 +42,11 @@ impl Configuration {
         if response.remove("status") != Some(Value::Bool(true)) {
             return Err(AdapterError::Unavailable);
         }
-        if response.remove("version").as_ref().and_then(Value::as_str) != Some(SUNSHINE_VERSION) {
+        let sunshine_version = response
+            .remove("version")
+            .and_then(|value| value.as_str().map(str::to_owned))
+            .ok_or(AdapterError::UnsafeConfiguration)?;
+        if !sunshine_client_protocol::is_supported_sunshine_version(&sunshine_version) {
             return Err(AdapterError::UnsupportedVersion);
         }
         if !response
@@ -74,7 +79,10 @@ impl Configuration {
                 fields.insert(key, value.to_owned());
             }
         }
-        let configuration = Self { fields };
+        let configuration = Self {
+            sunshine_version,
+            fields,
+        };
         configuration.encoded()?;
         Ok(configuration)
     }
@@ -93,10 +101,14 @@ impl Configuration {
         format!("{:x}", digest.finalize())
     }
 
+    pub fn sunshine_version(&self) -> &str {
+        &self.sunshine_version
+    }
+
     pub fn snapshot(&self, effectiveness: Effectiveness) -> ConfigSnapshot {
         ConfigSnapshot {
             revision: self.revision(),
-            sunshine_version: SUNSHINE_VERSION.to_owned(),
+            sunshine_version: self.sunshine_version.clone(),
             fields: self
                 .fields
                 .iter()
@@ -174,10 +186,12 @@ impl LocalSunshine {
         {
             return Err(AdapterError::InvalidLocalEndpoint);
         }
-        let roots = if root_pem.is_empty() {
-            Vec::new()
+        let trust = if root_pem.is_empty() {
+            TrustMode::System
         } else {
-            vec![Certificate::from_pem(root_pem).map_err(|_| AdapterError::InvalidLocalEndpoint)?]
+            TrustMode::CustomOnly(vec![
+                Certificate::from_pem(root_pem).map_err(|_| AdapterError::InvalidLocalEndpoint)?,
+            ])
         };
         let client = SecureHttpClient::new(
             Duration::from_secs(15),
@@ -187,7 +201,7 @@ impl LocalSunshine {
             },
             TlsConfig {
                 identity: None,
-                roots,
+                trust,
             },
             format!("sunshine-client/{}", env!("CARGO_PKG_VERSION")),
         )

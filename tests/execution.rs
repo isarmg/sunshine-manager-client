@@ -422,6 +422,17 @@ fn configuration_metadata_and_unsupported_versions_are_not_saved() {
             .fields
             .is_empty()
     );
+    let legacy = Configuration::from_response(
+        json!({"status": true, "platform": "linux", "version": "2026.516.143833"}),
+    )
+    .unwrap();
+    assert_eq!(legacy.sunshine_version(), "2026.516.143833");
+    assert_eq!(
+        legacy
+            .snapshot(Effectiveness::PendingVerification)
+            .sunshine_version,
+        "2026.516.143833"
+    );
 }
 
 #[test]

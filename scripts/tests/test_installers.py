@@ -9,7 +9,7 @@ ROOT = Path(__file__).resolve().parents[2]
 
 
 class InstallerTests(unittest.TestCase):
-    def test_windows_service_and_first_run_setup_contract(self):
+    def test_windows_service_install_does_not_launch_interactive_setup(self):
         tree = ET.parse(ROOT / 'packaging/windows/Package.wxs')
         ns = {'w': 'http://wixtoolset.org/schemas/v4/wxs'}
         service = tree.find('.//w:ServiceInstall', ns)
@@ -25,20 +25,8 @@ class InstallerTests(unittest.TestCase):
         self.assertEqual(path_entry.get('Part'), 'last')
         self.assertEqual(path_entry.get('Permanent'), 'no')
         self.assertEqual(path_entry.get('System'), 'yes')
-        setup = tree.find('.//w:CustomAction[@Id="LaunchInteractiveSetup"]', ns)
-        self.assertIsNotNone(setup)
-        self.assertEqual(setup.get('FileRef'), 'ClientExe')
-        self.assertEqual(
-            setup.get('ExeCommand'),
-            'setup --interactive --installer-session',
-        )
-        self.assertEqual(setup.get('Execute'), 'immediate')
-        self.assertEqual(setup.get('Impersonate'), 'yes')
-        self.assertEqual(setup.get('Return'), 'ignore')
-        sequence = tree.find('.//w:InstallExecuteSequence/w:Custom[@Action="LaunchInteractiveSetup"]', ns)
-        self.assertIsNotNone(sequence)
-        self.assertEqual(sequence.get('After'), 'InstallFinalize')
-        self.assertEqual(sequence.get('Condition'), 'NOT Installed AND NOT REMOVE~="ALL" AND UILevel >= 4')
+        self.assertIsNone(tree.find('.//w:CustomAction[@Id="LaunchInteractiveSetup"]', ns))
+        self.assertIsNone(tree.find('.//w:InstallExecuteSequence/w:Custom[@Action="LaunchInteractiveSetup"]', ns))
         self.assertNotIn('TrayExe', (ROOT / 'packaging/windows/Package.wxs').read_text())
 
     def test_deb_build_and_private_setup_contract(self):

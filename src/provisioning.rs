@@ -11,7 +11,7 @@ use sarmg_client_secure_http::{NetworkPolicy, ResponseBudget, SecureHttpClient, 
 use serde::{Deserialize, Serialize};
 use std::{path::Path, sync::Arc, time::Duration};
 use sunshine_client_protocol::{
-    Binding, Capabilities, ClientOs, Effectiveness, PROTOCOL, SUNSHINE_VERSION, config::FIELDS,
+    Binding, Capabilities, ClientOs, Effectiveness, PROTOCOL, config::FIELDS,
 };
 use tokio::sync::watch;
 use uuid::Uuid;
@@ -298,13 +298,26 @@ pub async fn run(state_path: &Path, shutdown: watch::Receiver<bool>) -> Result<(
         identity.config.adapter()?,
         journal,
     ));
+    let sunshine_version = identity
+        .config
+        .adapter()?
+        .read()
+        .await
+        .map_err(|error| match error {
+            crate::adapter::AdapterError::Unavailable => ProvisionError::Unavailable,
+            crate::adapter::AdapterError::UnsupportedVersion => ProvisionError::Unsupported,
+            crate::adapter::AdapterError::UnsafeConfiguration
+            | crate::adapter::AdapterError::InvalidLocalEndpoint => ProvisionError::Configuration,
+        })?
+        .sunshine_version()
+        .to_owned();
     let connection =
         ManagerConnection::new(&identity.config.manager_endpoint, identity.credential, &[])?;
     let capabilities = Capabilities {
         protocol: PROTOCOL.into(),
         client_version: env!("CARGO_PKG_VERSION").into(),
         os: client_os()?,
-        sunshine_version: SUNSHINE_VERSION.into(),
+        sunshine_version,
         restart_allowed: identity.config.restart_allowed,
         managed_fields: FIELDS.iter().map(|s| s.to_string()).collect(),
     };

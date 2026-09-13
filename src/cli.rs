@@ -236,7 +236,24 @@ fn ask_yes_no(label: &str, default: bool) -> Result<bool> {
 }
 
 fn setup_args(args: &Args, words: Vec<String>, interactive: bool) -> Args {
-    let mut options = args.options.clone();
+    let mut options: std::collections::BTreeMap<String, String> = args
+        .options
+        .iter()
+        .filter(|(name, _)| {
+            matches!(
+                name.as_str(),
+                "--format"
+                    | "--timeout"
+                    | "--config"
+                    | "--state"
+                    | "--non-interactive"
+                    | "--no-color"
+                    | "--input-stdin"
+                    | "--server"
+            )
+        })
+        .map(|(name, value)| (name.clone(), value.clone()))
+        .collect();
     if interactive {
         options.insert("--interactive".into(), "true".into());
     }
@@ -249,11 +266,22 @@ fn setup_args(args: &Args, words: Vec<String>, interactive: bool) -> Args {
 }
 
 fn setup_service_args(args: &Args) -> Args {
-    let mut options = args.options.clone();
-    options.remove("--interactive");
-    options.remove("--input-stdin");
-    options.remove("--server");
-    options.remove("--now");
+    let options = args
+        .options
+        .iter()
+        .filter(|(name, _)| {
+            matches!(
+                name.as_str(),
+                "--format"
+                    | "--timeout"
+                    | "--config"
+                    | "--state"
+                    | "--non-interactive"
+                    | "--no-color"
+            )
+        })
+        .map(|(name, value)| (name.clone(), value.clone()))
+        .collect();
     Args {
         words: vec![],
         options,
@@ -284,6 +312,10 @@ fn startup_policy_matches(status: &Value, enabled: bool) -> bool {
     } else {
         matches!(observed, "manual" | "disabled")
     }
+}
+
+fn pairing_is_active(status: &Value) -> bool {
+    status["pairing"]["state"] == "active"
 }
 
 fn record_setup_step(
@@ -423,6 +455,18 @@ fn setup(args: &Args, path: PathBuf) -> Result<Value> {
     let pairing = if existing.as_ref().is_some_and(|id| id.enrolled) {
         json!({"committed":true,"already_active":true})
     } else {
+        let service_api = service();
+        let service_status = service_api
+            .status(args.timeout)
+            .map_err(|error| error.at_step("service_quiesce"))?;
+        if service_status["state"] == "running" {
+            let stopped = service_api
+                .change(&setup_service_args(args), "stop", &path)
+                .map_err(|error| error.at_step("service_quiesce"))?;
+            if stopped["state"] == "running" {
+                return Err(fail(11, "service_state_unconfirmed").at_step("service_quiesce"));
+            }
+        }
         let has_protected_input = args.has("--input-stdin") || args.has("--interactive");
         let resume = existing.is_some()
             && !has_protected_input
@@ -439,7 +483,7 @@ fn setup(args: &Args, path: PathBuf) -> Result<Value> {
     };
     let pairing_status =
         local_status(&path).map_err(|error| setup_failure(error, &pairing, "pairing"))?;
-    if pairing_status["state"] != "active" {
+    if !pairing_is_active(&pairing_status) {
         return Err(setup_failure(
             fail(11, "pairing_postcondition_unconfirmed"),
             &pairing,
@@ -534,16 +578,31 @@ fn setup(args: &Args, path: PathBuf) -> Result<Value> {
                 "connection",
             ));
         }
-        let status = wait_for_healthy(&path, args.timeout)
-            .map_err(|error| setup_failure(error, &pairing, "connection"))?;
-        record_setup_step(
-            &mut steps,
-            interactive,
-            "connection",
-            "verified",
-            json!({"health":status["health"]}),
-        );
-        status
+        match wait_for_healthy(&path, args.timeout) {
+            Ok(status) => {
+                record_setup_step(
+                    &mut steps,
+                    interactive,
+                    "connection",
+                    "verified",
+                    json!({"health":status["health"]}),
+                );
+                status
+            }
+            Err(error) if error.code == "connection_unconfirmed" => {
+                let status = local_status(&path)
+                    .map_err(|error| setup_failure(error, &pairing, "connection"))?;
+                record_setup_step(
+                    &mut steps,
+                    interactive,
+                    "connection",
+                    "warning",
+                    json!({"health":status["health"],"reason":"connection_unconfirmed"}),
+                );
+                json!({"state":"warning","reason":"connection_unconfirmed","status":status})
+            }
+            Err(error) => return Err(setup_failure(error, &pairing, "connection")),
+        }
     } else {
         record_setup_step(
             &mut steps,
@@ -965,5 +1024,27 @@ mod setup_tests {
         assert!(failure.committed);
         assert_eq!(failure.transaction_id.as_deref(), Some("request-1"));
         assert_eq!(failure.step, Some("service_runtime"));
+    }
+
+    #[test]
+    fn setup_reads_the_nested_pairing_state_and_filters_internal_options() {
+        assert!(pairing_is_active(&json!({"pairing":{"state":"active"}})));
+        assert!(!pairing_is_active(&json!({"state":"active"})));
+        let parsed = Args::parse(vec![
+            "setup".into(),
+            "--interactive".into(),
+            "--installer-session".into(),
+            "--elevated-setup-child".into(),
+        ])
+        .unwrap();
+        let child = setup_args(&parsed, vec!["pair".into()], true);
+        assert!(child.has("--interactive"));
+        assert!(!child.has("--installer-session"));
+        assert!(!child.has("--elevated-setup-child"));
+        assert!(
+            child
+                .validate_options(&["--interactive", "--input-stdin", "--server"])
+                .is_ok()
+        );
     }
 }

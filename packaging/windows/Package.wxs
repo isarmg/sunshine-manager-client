@@ -27,14 +27,6 @@
     <StandardDirectory Id="CommonAppDataFolder" />
     <StandardDirectory Id="ProgramMenuFolder" />
     <Feature Id="Complete" Title="Sunshine Client" Level="1"><ComponentRef Id="ClientService" /></Feature>
-    <!--
-      The installed CLI relaunches this interactive session through the Windows
-      runas verb before it reads or writes protected state. Silent/automation
-      installs skip this action and can resume with an elevated setup command.
-    -->
-    <CustomAction Id="LaunchInteractiveSetup" FileRef="ClientExe" ExeCommand="setup --interactive --installer-session" Execute="immediate" Impersonate="yes" Return="ignore" />
-    <InstallExecuteSequence>
-      <Custom Action="LaunchInteractiveSetup" After="InstallFinalize" Condition="NOT Installed AND NOT REMOVE~=&quot;ALL&quot; AND UILevel &gt;= 4" />
-    </InstallExecuteSequence>
+    <!-- Pairing is an explicit post-install CLI action; MSI never opens an interactive wizard. -->
   </Package>
 </Wix>
