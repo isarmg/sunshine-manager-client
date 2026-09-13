@@ -4,6 +4,10 @@ Sunshine 的独立本机管理代理，公开入口为 `sunshine-client`。不�
 
 当前纯 CLI 与系统服务版本为 `0.1.1`；用法和验收限制见 [CLI 改造说明](docs/releases/cli-unreleased.md)。安装产物未签名、未公证，实机与升级验收边界见发行说明。
 
+公共 CLI 输出、受保护输入、系统服务生命周期和本地只读状态通道来自 Client Foundation 0.9.0；本仓只
+保留 Sunshine 配对、证书信任、本机配置访问、任务执行及结果确认。Manager 和本机 Sunshine 是两条独立
+TLS 连接，任一连接的设置流程完成都不替代实际连接确认。
+
 支持 Windows x64、Linux x64 和 macOS Apple Silicon（arm64）。不再为 Intel macOS 适配、运行 CI 或提供发行包。
 
 各平台安装、覆盖修复、配对和 HTTPS 证书配置见 [完整配置指南](docs/platform-setup.md)。每个平台只发布一个原生安装包；不再在发行归档中附带 PowerShell、Shell 或 Python 安装包装脚本。

@@ -11,6 +11,4 @@ pub mod storage;
 pub mod transport;
 
 pub mod cli;
-mod cli_common;
-
-pub mod runtime_status;
+pub use sarmg_client_runtime::local_status as runtime_status;

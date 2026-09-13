@@ -5,9 +5,10 @@
 | 维度 | 契约 |
 | --- | --- |
 | CLI JSON | `schema_version = 1` |
+| Client Foundation | `0.9.0`，固定提交 `67e59576fd641091bb075bb999c17520a9e45256` |
 | 配置格式 | `sunshine-bootstrap-v1`，旧 bootstrap 严格字段保持 |
 | 身份与日志格式 | `sunshine-identity-journal-v1`；Unix 私有文件、Windows SQLite 后端保持 |
-| IPC | `GetStatus/1`，进程世代、安装身份和配置修订校验 |
+| IPC | Foundation `GetStatus/1`，进程世代、安装身份和配置修订校验 |
 | 协议依赖 | Server 提交 `d4b98b06a00d185bd845a4bd3e3df8c939807864`，增加真实 macOS 平台值 |
 
 | 来源 → 目标 | 数据兼容性 | 安装与回退边界 |

@@ -45,13 +45,31 @@ sudo /usr/local/bin/sunshine-client setup
 
 再次运行原生 PKG 即可覆盖旧程序，或在保留状态的卸载后重装。安装器保留身份和执行记录；随后运行 `/usr/local/bin/sunshine-client setup`。发行文件未签名、未公证，使用系统提供的本地批准入口允许已校验的程序运行，不要全局关闭系统安全检查。
 
-## Sunshine HTTPS 证书配置（每个平台都需要）
+## Sunshine HTTPS 证书配置（两种互斥模式）
 
-Client 只接受 HTTPS 回环 IP 字面量，例如 `https://127.0.0.1:47990/`，证书 SAN 必须包含 `IP:127.0.0.1`。浏览器点击“继续访问”只影响浏览器，不会为系统服务建立信任。
+Client 始终验证 TLS，不提供 `--insecure`。配置 Sunshine 连接时必须明确选择以下一种模式：
 
-若 Sunshine 默认证书不满足要求，请由管理员准备带正确 IP SAN 的证书及私钥，在 Sunshine 配置中设置 `cert` 和 `pkey` 的绝对路径并重启 Sunshine。配置项及密钥兼容要求见 [Sunshine 官方配置说明](https://docs.lizardbyte.dev/projects/sunshine/master/md_docs_2configuration.html)。这会更改 Sunshine 的服务器证书，现有 Moonlight 配对可能需要重新确认；Client 安装器不会自动替换它。证书信任应在运行 Client 服务的账户/系统范围完成后再运行 `setup`。
+1. **系统信任与名称验证**：不提交 `sunshine_certificate` 或 `sunshine_certificate_path`。证书链必须被运行
+   Client 服务的系统账户信任，并且证书 SAN 必须匹配 `sunshine_endpoint` 的主机名或 IP。此模式适合由
+   企业 CA 或公共 CA 签发的证书；只有 endpoint 使用 `127.0.0.1` 时才需要 `IP:127.0.0.1` SAN。
+2. **Sunshine 证书精确固定**：在 `setup` 输入中提供 `sunshine_certificate_path`，指向 Sunshine 配置项
+   `cert` 对应的公开 PEM（通常是 Sunshine 自带的 `cacert.pem`）；自动化也可直接提供
+   `sunshine_certificate` PEM 字符串，两者不能同时存在。Client 保存公开证书并要求服务端呈现完全相同的
+   证书，不依赖系统 CA，也不要求回环 IP SAN。路径必须是本机绝对路径、普通文件且不能是符号链接，私钥
+   `pkey` 绝不能提供给 Client。
 
-核对签发 CA 的来源和 SHA256 指纹后，将 **CA 公共证书** 导入系统信任库，私钥不导入、不发送：
+浏览器点击“继续访问”只影响浏览器，不会改变后台服务的系统信任，也不会建立证书固定。若采用系统信任模式，
+核对签发 CA 的来源和 SHA256 指纹后，可将 **CA 公共证书** 导入系统信任库：
+
+公开的首次配对入口使用受保护的 stdin JSON；字段与内部 `deploy/bootstrap.example.json` 不同：
+
+```json
+{"server":"https://manager.example.org/","authorization_code":"REPLACE_WITH_INSTANCE_CODE","sunshine_endpoint":"https://127.0.0.1:47990/","sunshine_certificate_path":"/absolute/path/to/cacert.pem","sunshine_username":"REPLACE_LOCALLY","sunshine_password":"REPLACE_LOCALLY","restart_allowed":false}
+```
+
+此 JSON 只可交给 `sunshine-client setup --input-stdin --non-interactive` 的 stdin。占位符不能直接使用；证书
+路径属于 Client 主机；只提供 Sunshine 的公开证书，绝不提供 `pkey` 私钥；秘密不得放进命令参数、部署日志
+或版本库。`deploy/bootstrap.example.json` 仅供旧的受保护 bootstrap 导入入口使用。
 
 Windows 管理员 PowerShell：
 
@@ -72,11 +90,17 @@ macOS：
 sudo security add-trusted-cert -d -r trustRoot -k /Library/Keychains/System.keychain ./sunshine-local-ca.cer
 ```
 
-完成后使用管理员终端执行 `sunshine-client doctor --sunshine`，再运行 `sunshine-client setup`。名称不匹配时，导入 CA 也无法修复，必须换成带正确 IP SAN 的服务器证书。认证失败时在停止 Client 服务后运行 `sunshine-client credentials update --interactive`，输入 Sunshine 的用户名和密码。
+完成后使用管理员终端执行 `sunshine-client doctor --sunshine`，再运行 `sunshine-client setup`。系统信任模式
+发生名称不匹配时，导入 CA 无法修复，必须让证书 SAN 与 endpoint 一致。Sunshine 更换证书后，精确固定模式
+会按设计拒绝连接；停止 Client 服务并核对新证书来源和指纹，然后运行
+`sunshine-client credentials update --interactive`，输入新用户名、密码和 `cacert.pem` 绝对路径。自动化输入
+可增加 `sunshine_certificate_path` 或 `sunshine_certificate`；显式设置 `use_system_trust: true` 会移除旧固定证书，
+且不能同时提供证书字段。留空证书更新会保留现有信任模式。此操作不重新配对 Manager，但 Sunshine 本身若
+更换了设备配对状态，仍需按 Sunshine/Moonlight 流程确认。
 
 ## 已有配置、升级与故障处理
 
-`setup` 按配置、配对、服务注册、启动策略、运行状态和连接顺序执行后置验证。交互终端会逐步显示 `verified`；JSON 失败响应中的 `error.step` 指明失败关卡，`error.code` 和 `error.message` 给出稳定原因，操作系统服务命令失败时 `error.detail` 保留经过控制字符清理和长度限制的原始诊断。请求连接验证但服务未运行会直接失败，不再静默跳过后仍报告完成。
+`setup` 按配置、配对、服务注册、启动策略、运行状态和连接顺序执行后置验证。交互终端会逐步显示 `verified`；JSON 失败响应中的 `error.step` 指明失败关卡，`error.code` 和 `error.message` 给出稳定原因，操作系统服务命令失败时 `error.detail` 保留经过控制字符清理和长度限制的原始诊断。请求连接验证但服务未运行会直接失败，不再静默跳过后仍报告完成。设置写入完成与连接确认是不同层次；如果返回 `connection_unconfirmed`，保留现有身份并分别运行 `doctor --network` 和 `doctor --sunshine`，不能把它视为 Manager 与 Sunshine 均已连接，也不要删除状态重新配对。
 
 已有有效身份无需重复初始化或配对。再次运行 `setup` 会复用身份，待处理事务会调用 `pair resume`；`config show --format json` 查看脱敏配置与修订，候选配置只支持 `sunshine_endpoint`、`restart_allowed`；用 `config validate/diff/apply --file <绝对路径>`，提交还需要 `--expected-revision <当前修订>`，写入前停止服务。
 

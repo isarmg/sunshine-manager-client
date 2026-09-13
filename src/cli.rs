@@ -1,9 +1,9 @@
 use crate::{
-    cli_common::*,
     provisioning::{self, Bootstrap, Identity, ProvisionError},
     storage::{MaintenanceGuard, ProtectedState},
 };
 use rand::RngCore;
+use sarmg_client_cli::*;
 use serde::{Deserialize, Serialize};
 use serde_json::{Value, json};
 use std::path::{Path, PathBuf};
@@ -29,6 +29,7 @@ fn service() -> Service {
         label: "org.sarmg.sunshine-client",
         default_config: default_state(),
         binary: "sunshine-client",
+        log_path: "/var/log/sunshine-client.log",
     }
 }
 fn storage_error(error: impl std::fmt::Debug + std::any::Any) -> Failure {
@@ -141,6 +142,37 @@ struct Settings {
 struct Credentials {
     sunshine_username: Zeroizing<String>,
     sunshine_password: Zeroizing<String>,
+    #[serde(default)]
+    sunshine_certificate: Option<String>,
+    #[serde(default)]
+    sunshine_certificate_path: Option<PathBuf>,
+    #[serde(default)]
+    use_system_trust: bool,
+}
+
+fn credential_certificate_update(credentials: &Credentials) -> Result<Option<Option<String>>> {
+    if credentials.use_system_trust
+        && (credentials.sunshine_certificate.is_some()
+            || credentials.sunshine_certificate_path.is_some())
+    {
+        return Err(fail(2, "conflicting_sunshine_trust_update"));
+    }
+    if credentials.sunshine_certificate.is_some() && credentials.sunshine_certificate_path.is_some()
+    {
+        return Err(fail(2, "duplicate_sunshine_certificate_source"));
+    }
+    if credentials.use_system_trust {
+        return Ok(Some(None));
+    }
+    match (
+        credentials.sunshine_certificate.as_ref(),
+        credentials.sunshine_certificate_path.as_deref(),
+    ) {
+        (Some(pem), None) => Ok(Some(Some(pem.clone()))),
+        (None, Some(path)) => Ok(Some(Some(read_sunshine_certificate(path)?))),
+        (None, None) => Ok(None),
+        (Some(_), Some(_)) => unreachable!(),
+    }
 }
 fn read_store(path: &Path) -> Result<Option<ProtectedState>> {
     match std::fs::symlink_metadata(path.join("provisioning")) {
@@ -708,7 +740,11 @@ pub fn entry(raw: Vec<String>) -> u8 {
     let parse_format = requested_error_format(&raw);
     #[cfg(windows)]
     let elevation_raw = raw.clone();
-    let args = match Args::parse(raw) {
+    let args = match Args::parse(
+        raw,
+        &["--bootstrap", "--file", "--server", "--expected-revision"],
+        &["--network", "--sunshine"],
+    ) {
         Ok(a) => a,
         Err(e) => return emit("sunshine-client", "parse", parse_format, &Err(e)),
     };
@@ -951,9 +987,21 @@ fn execute(args: &Args) -> Result<Value> {
         ["credentials", "update"] => {
             args.validate_options(&["--interactive", "--input-stdin"])?;
             let c: Credentials = if args.has("--interactive") {
+                let trust = prompt(
+                    "New Sunshine cacert.pem path (blank keeps current, 'system' uses system trust)",
+                    false,
+                )?;
+                let (sunshine_certificate_path, use_system_trust) = match trust.as_str() {
+                    "" => (None, false),
+                    "system" => (None, true),
+                    value => (Some(PathBuf::from(value)), false),
+                };
                 Credentials {
                     sunshine_username: Zeroizing::new(prompt("Sunshine username", false)?),
                     sunshine_password: Zeroizing::new(prompt("Sunshine password", true)?),
+                    sunshine_certificate: None,
+                    sunshine_certificate_path,
+                    use_system_trust,
                 }
             } else {
                 document(args)?
@@ -961,8 +1009,12 @@ fn execute(args: &Args) -> Result<Value> {
             let _guard = MaintenanceGuard::acquire(&path).map_err(storage_error)?;
             let store = ProtectedState::open(&path.join("provisioning")).map_err(storage_error)?;
             let mut id = identity(&store)?.ok_or_else(|| fail(4, "awaiting_pairing"))?;
+            let certificate = credential_certificate_update(&c)?;
             id.config.sunshine_username = c.sunshine_username;
             id.config.sunshine_password = c.sunshine_password;
+            if let Some(certificate) = certificate {
+                id.config.sunshine_certificate = certificate;
+            }
             id.config.adapter().map_err(provision_error)?;
             id.persist(&store).map_err(provision_error)?;
             Ok(json!({"committed":true,"binding":id.binding,"restart_required":true}))
@@ -1060,6 +1112,35 @@ fn validate_settings(settings: &Settings) -> Result<()> {
 mod setup_tests {
     use super::*;
 
+    fn credentials() -> Credentials {
+        Credentials {
+            sunshine_username: Zeroizing::new("user".into()),
+            sunshine_password: Zeroizing::new("password".into()),
+            sunshine_certificate: None,
+            sunshine_certificate_path: None,
+            use_system_trust: false,
+        }
+    }
+
+    #[test]
+    fn credential_update_distinguishes_keep_pin_and_system_trust() {
+        assert_eq!(credential_certificate_update(&credentials()).unwrap(), None);
+        let mut pinned = credentials();
+        pinned.sunshine_certificate = Some("certificate".into());
+        assert_eq!(
+            credential_certificate_update(&pinned).unwrap(),
+            Some(Some("certificate".into()))
+        );
+        let mut system = credentials();
+        system.use_system_trust = true;
+        assert_eq!(credential_certificate_update(&system).unwrap(), Some(None));
+        system.sunshine_certificate = Some("certificate".into());
+        assert_eq!(
+            credential_certificate_update(&system).unwrap_err().code,
+            "conflicting_sunshine_trust_update"
+        );
+    }
+
     #[test]
     fn startup_policy_requires_a_verified_platform_state() {
         assert!(startup_policy_matches(
@@ -1093,12 +1174,16 @@ mod setup_tests {
     fn setup_reads_the_nested_pairing_state_and_filters_internal_options() {
         assert!(pairing_is_active(&json!({"pairing":{"state":"active"}})));
         assert!(!pairing_is_active(&json!({"state":"active"})));
-        let parsed = Args::parse(vec![
-            "setup".into(),
-            "--interactive".into(),
-            "--installer-session".into(),
-            "--elevated-setup-child".into(),
-        ])
+        let parsed = Args::parse(
+            vec![
+                "setup".into(),
+                "--interactive".into(),
+                "--installer-session".into(),
+                "--elevated-setup-child".into(),
+            ],
+            &["--bootstrap", "--file", "--server", "--expected-revision"],
+            &["--network", "--sunshine"],
+        )
         .unwrap();
         let child = setup_args(&parsed, vec!["pair".into()], true);
         assert!(child.has("--interactive"));
