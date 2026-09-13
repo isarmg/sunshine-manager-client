@@ -130,6 +130,67 @@ fn read_sunshine_certificate(path: &Path) -> Result<String> {
     }
     String::from_utf8(bytes).map_err(input_error)
 }
+
+fn sunshine_certificate_candidates() -> Vec<PathBuf> {
+    let mut candidates = Vec::new();
+    if let Some(directory) = std::env::var_os("SUNSHINE_CONFIG_DIR") {
+        candidates.push(PathBuf::from(directory).join("cacert.pem"));
+    }
+    if let Some(directory) = std::env::var_os("XDG_CONFIG_HOME") {
+        candidates.push(PathBuf::from(directory).join("sunshine/cacert.pem"));
+    }
+    if let Some(home) = std::env::var_os("HOME") {
+        candidates.push(PathBuf::from(home).join(".config/sunshine/cacert.pem"));
+    }
+    if let Some(program_data) = std::env::var_os("PROGRAMDATA") {
+        candidates.push(PathBuf::from(program_data).join("Sunshine/config/cacert.pem"));
+    }
+    candidates.extend([
+        PathBuf::from("/etc/sunshine/cacert.pem"),
+        PathBuf::from("/var/lib/sunshine/.config/sunshine/cacert.pem"),
+    ]);
+    candidates.sort();
+    candidates.dedup();
+    candidates.retain(|path| {
+        std::fs::symlink_metadata(path).is_ok_and(|metadata| {
+            metadata.is_file() && !metadata.file_type().is_symlink() && metadata.len() <= 64 * 1024
+        })
+    });
+    candidates
+}
+
+fn prompt_sunshine_certificate() -> Result<Option<PathBuf>> {
+    let candidates = sunshine_certificate_candidates();
+    if !candidates.is_empty() {
+        eprintln!("Discovered local Sunshine public certificates:");
+        for (index, path) in candidates.iter().enumerate() {
+            eprintln!("  {}. {}", index + 1, path.display());
+        }
+    }
+    let answer = prompt(
+        if candidates.is_empty() {
+            "Sunshine cacert.pem absolute path (or type 'system' explicitly)"
+        } else {
+            "Select certificate number/path [1], or type 'system' explicitly"
+        },
+        false,
+    )?;
+    if answer == "system" {
+        return Ok(None);
+    }
+    if answer.is_empty() && !candidates.is_empty() {
+        return Ok(Some(candidates[0].clone()));
+    }
+    if let Ok(index) = answer.parse::<usize>()
+        && (1..=candidates.len()).contains(&index)
+    {
+        return Ok(Some(candidates[index - 1].clone()));
+    }
+    if answer.is_empty() {
+        return Err(fail(2, "sunshine_certificate_selection_required"));
+    }
+    Ok(Some(PathBuf::from(answer)))
+}
 #[derive(Deserialize, Serialize)]
 #[serde(deny_unknown_fields)]
 struct Settings {
@@ -428,13 +489,7 @@ fn execute_pair(args: &Args, path: &Path) -> Result<Value> {
                 authorization_code: Zeroizing::new(prompt("Authorization code", true)?),
                 sunshine_endpoint: prompt("Local Sunshine HTTPS URL", false)?,
                 sunshine_certificate: None,
-                sunshine_certificate_path: match prompt(
-                    "Sunshine cacert.pem absolute path (blank for system trust)",
-                    false,
-                )? {
-                    value if value.is_empty() => None,
-                    value => Some(PathBuf::from(value)),
-                },
+                sunshine_certificate_path: prompt_sunshine_certificate()?,
                 sunshine_username: Zeroizing::new(prompt("Sunshine username", false)?),
                 sunshine_password: Zeroizing::new(prompt("Sunshine password", true)?),
                 restart_allowed: prompt("Allow controlled restart? [no]", false)? == "yes",
@@ -536,10 +591,42 @@ fn setup(args: &Args, path: PathBuf) -> Result<Value> {
     }
     let interactive = !args.has("--non-interactive") && !args.has("--input-stdin");
     let mut steps = Vec::new();
+    let service_api = service();
+    let initial_service = service_api
+        .status(args.timeout)
+        .map_err(|error| error.at_step("service_inspection"))?;
+    let (default_enable, default_start) = setup_service_intent(&initial_service);
     let existing = match read_store(&path).map_err(|error| error.at_step("configuration"))? {
         Some(store) => identity(&store).map_err(|error| error.at_step("configuration"))?,
         None => None,
     };
+    if let Some(identity) = existing.as_ref().filter(|identity| identity.enrolled) {
+        if args.has("--input-stdin") {
+            return Err(
+                fail(5, "active_setup_input_requires_pair_replace").at_step("configuration")
+            );
+        }
+        if let Some(server) = args.get("--server") {
+            let mut expected = sarmg_client_secure_http::Url::parse(server)
+                .map_err(|_| fail(2, "invalid_server_origin").at_step("configuration"))?;
+            if expected.scheme() != "https"
+                || expected.path() != "/"
+                || expected.query().is_some()
+                || expected.fragment().is_some()
+            {
+                return Err(fail(2, "invalid_server_origin").at_step("configuration"));
+            }
+            expected
+                .set_scheme("wss")
+                .map_err(|_| fail(2, "invalid_server_origin").at_step("configuration"))?;
+            expected.set_path("/sunshine-client/v1/connect");
+            if identity.config.manager_endpoint != expected.as_str() {
+                return Err(
+                    fail(5, "server_replacement_requires_pair_replace").at_step("configuration")
+                );
+            }
+        }
+    }
     record_setup_step(
         &mut steps,
         interactive,
@@ -550,7 +637,6 @@ fn setup(args: &Args, path: PathBuf) -> Result<Value> {
     let pairing = if existing.as_ref().is_some_and(|id| id.enrolled) {
         json!({"committed":true,"already_active":true})
     } else {
-        let service_api = service();
         let service_status = service_api
             .status(args.timeout)
             .map_err(|error| error.at_step("service_quiesce"))?;
@@ -594,17 +680,16 @@ fn setup(args: &Args, path: PathBuf) -> Result<Value> {
     );
     let (enable, start, verify) = if interactive {
         (
-            ask_yes_no("Enable service at system startup?", true)
+            ask_yes_no("Enable service at system startup?", default_enable)
                 .map_err(|error| setup_failure(error, &pairing, "preferences"))?,
-            ask_yes_no("Start the service now?", true)
+            ask_yes_no("Run the service now?", default_start)
                 .map_err(|error| setup_failure(error, &pairing, "preferences"))?,
-            ask_yes_no("Verify the connection now?", true)
+            ask_yes_no("Verify the connection now?", default_start)
                 .map_err(|error| setup_failure(error, &pairing, "preferences"))?,
         )
     } else {
-        (true, true, true)
+        (default_enable, default_start, default_start)
     };
-    let service_api = service();
     let registered = service_api
         .verified_status(args.timeout, &path)
         .map_err(|error| setup_failure(error, &pairing, "service_registration"))?;
@@ -653,9 +738,16 @@ fn setup(args: &Args, path: PathBuf) -> Result<Value> {
         );
         status
     } else {
-        let status = service_api
+        let current = service_api
             .verified_status(args.timeout, &path)
             .map_err(|error| setup_failure(error, &pairing, "service_runtime"))?;
+        let status = if current["state"] == "running" {
+            service_api
+                .change(&setup_service_args(args), "stop", &path)
+                .map_err(|error| setup_failure(error, &pairing, "service_runtime"))?
+        } else {
+            current
+        };
         record_setup_step(
             &mut steps,
             interactive,
@@ -683,18 +775,6 @@ fn setup(args: &Args, path: PathBuf) -> Result<Value> {
                     json!({"health":status["health"]}),
                 );
                 status
-            }
-            Err(error) if error.code == "connection_unconfirmed" => {
-                let status = local_status(&path)
-                    .map_err(|error| setup_failure(error, &pairing, "connection"))?;
-                record_setup_step(
-                    &mut steps,
-                    interactive,
-                    "connection",
-                    "warning",
-                    json!({"health":status["health"],"reason":"connection_unconfirmed"}),
-                );
-                json!({"state":"warning","reason":"connection_unconfirmed","status":status})
             }
             Err(error) => return Err(setup_failure(error, &pairing, "connection")),
         }
@@ -776,7 +856,7 @@ pub fn entry(raw: Vec<String>) -> u8 {
     }
     if args.has("--help") {
         println!(
-            "sunshine-client: setup; config init|show|validate|diff|apply; pair [status|resume|replace]; credentials update; status; doctor; service status|start|stop|restart|enable|disable; run; version\nGlobal: --format human|json|ndjson --non-interactive --timeout 60s --no-color --config ABSOLUTE_STATE_DIRECTORY (--state compatibility alias)\nsetup/pair uses --interactive or --input-stdin. Sunshine's built-in certificate is accepted only when sunshine_certificate_path or sunshine_certificate is supplied through protected input. setup completes pairing, service startup policy and connection verification. No secret arguments. Configuration apply requires --expected-revision. Services must be stopped for writes."
+            "sunshine-client: setup; config init|show|edit|validate|diff|apply; pair [status|resume|replace]; credentials update; status; doctor; service status|start|stop|restart|enable|disable; run; version\nGlobal: --format human|json|ndjson --non-interactive --timeout 60s --no-color --config ABSOLUTE_STATE_DIRECTORY (--state compatibility alias)\nsetup/pair uses --interactive or --input-stdin. Sunshine's built-in certificate is accepted only when sunshine_certificate_path or sunshine_certificate is supplied through protected input. setup completes pairing, service startup policy and connection verification. No secret arguments. config edit uses VISUAL or EDITOR and commits through the same revision check as config apply. Services must be stopped for writes."
         );
         return 0;
     }
@@ -927,6 +1007,48 @@ fn execute(args: &Args) -> Result<Value> {
             let mut v = serde_json::to_value(&b).map_err(storage_error)?;
             redact(&mut v);
             Ok(json!({"config":v,"stored_revision":settings_revision(&b)?}))
+        }
+        ["config", "edit"] => {
+            args.validate_options(&[])?;
+            let store = read_store(&path)?.ok_or_else(|| fail(4, "awaiting_configuration"))?;
+            let (current_config, _) = current(&store)?;
+            let before = settings_revision(&current_config)?;
+            let edited = edit_json(
+                &serde_json::to_value(settings(&current_config)).map_err(storage_error)?,
+            )?;
+            let candidate: Settings = serde_json::from_value(edited).map_err(input_error)?;
+            validate_settings(&candidate)?;
+            drop(store);
+            let _guard = MaintenanceGuard::acquire(&path).map_err(storage_error)?;
+            let store = ProtectedState::open(&path.join("provisioning")).map_err(storage_error)?;
+            let (mut config, mut identity) = current(&store)?;
+            if settings_revision(&config)? != before {
+                return Err(fail(5, "revision_conflict"));
+            }
+            config.sunshine_endpoint = candidate.sunshine_endpoint;
+            config.restart_allowed = candidate.restart_allowed;
+            let after = settings_revision(&config)?;
+            if let Some(identity) = identity.as_mut() {
+                identity.config = config;
+                identity.persist(&store).map_err(provision_error)?;
+            } else if config.enrollment_token.is_empty() {
+                store
+                    .put(
+                        "local-settings.json",
+                        &serde_json::to_vec(&settings(&config)).map_err(storage_error)?,
+                    )
+                    .map_err(storage_error)?;
+            } else {
+                store
+                    .put(
+                        "bootstrap.json",
+                        &Zeroizing::new(serde_json::to_vec(&config).map_err(storage_error)?),
+                    )
+                    .map_err(storage_error)?;
+            }
+            Ok(
+                json!({"committed":true,"previous_revision":before,"stored_revision":after,"effective_revision":null,"restart_required":true}),
+            )
         }
         ["config", action] if ["validate", "diff", "apply"].contains(action) => {
             args.validate_options(&["--input-stdin", "--file", "--expected-revision"])?;

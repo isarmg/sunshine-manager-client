@@ -13,9 +13,9 @@ futures-util = { version = "0.3", features = ["sink"] }
 reqwest = { version = "0.13", default-features = false, features = ["json", "rustls"] }
 rand = "0.8"
 uuid = { version = "1", features = ["v4", "serde"] }
-sarmg-client-cli = { git = "https://github.com/isarmg/sarmg-foundation-client.git", rev = "67e59576fd641091bb075bb999c17520a9e45256", version = "=0.9.0" }
-sarmg-client-secure-http = { git = "https://github.com/isarmg/sarmg-foundation-client.git", rev = "67e59576fd641091bb075bb999c17520a9e45256", version = "=0.9.0" }
-sarmg-client-runtime = { git = "https://github.com/isarmg/sarmg-foundation-client.git", rev = "67e59576fd641091bb075bb999c17520a9e45256", version = "=0.9.0" }
+sarmg-client-cli = { git = "https://github.com/isarmg/sarmg-foundation-client.git", rev = "2fa783a1eb7aefde8e54e328f91d67aa9e1eb890", version = "=0.9.1" }
+sarmg-client-secure-http = { git = "https://github.com/isarmg/sarmg-foundation-client.git", rev = "2fa783a1eb7aefde8e54e328f91d67aa9e1eb890", version = "=0.9.1" }
+sarmg-client-runtime = { git = "https://github.com/isarmg/sarmg-foundation-client.git", rev = "2fa783a1eb7aefde8e54e328f91d67aa9e1eb890", version = "=0.9.1" }
 serde = { version = "1", features = ["derive"] }
 serde_json = "1"
 sha2 = "0.10"
@@ -28,7 +28,7 @@ tokio-rustls = "0.26"
 zeroize = { version = "1", features = ["serde"] }
 
 [target.'cfg(unix)'.dependencies]
-sarmg-client-fs-safety = { git = "https://github.com/isarmg/sarmg-foundation-client.git", rev = "67e59576fd641091bb075bb999c17520a9e45256", version = "=0.9.0" }
+sarmg-client-fs-safety = { git = "https://github.com/isarmg/sarmg-foundation-client.git", rev = "2fa783a1eb7aefde8e54e328f91d67aa9e1eb890", version = "=0.9.1" }
 
 [target.'cfg(target_os = "windows")'.dependencies]
 rusqlite = { version = "0.32", features = ["bundled"] }
