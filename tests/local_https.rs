@@ -55,6 +55,25 @@ fn certificates(path: &Path) {
             "basicConstraints=critical,CA:TRUE",
         ],
     );
+    // Mirrors Sunshine's built-in certificate: self-signed CN, without a loopback SAN.
+    openssl(
+        path,
+        &[
+            "req",
+            "-x509",
+            "-newkey",
+            "rsa:2048",
+            "-nodes",
+            "-keyout",
+            "sunshine.key",
+            "-out",
+            "sunshine.pem",
+            "-days",
+            "1",
+            "-subj",
+            "/CN=Sunshine Gamestream Host",
+        ],
+    );
     openssl(
         path,
         &[
@@ -132,8 +151,8 @@ impl Drop for Fixture {
 }
 
 async fn serve(path: &Path, responses: Vec<String>) -> Fixture {
-    let cert = CertificateDer::from_pem_file(path.join("server.pem")).unwrap();
-    let key = PrivateKeyDer::from_pem_file(path.join("server.key")).unwrap();
+    let cert = CertificateDer::from_pem_file(path.join("sunshine.pem")).unwrap();
+    let key = PrivateKeyDer::from_pem_file(path.join("sunshine.key")).unwrap();
     let config = rustls::ServerConfig::builder()
         .with_no_client_auth()
         .with_single_cert(vec![cert], key)
@@ -222,10 +241,10 @@ fn adapter(fixture: &Fixture, ca: &[u8]) -> LocalSunshine {
 
 #[tokio::test]
 #[ignore = "requires loopback sockets and openssl"]
-async fn verified_tls_rejects_wrong_ca_and_never_follows_redirects() {
+async fn pinned_builtin_certificate_rejects_mismatch_and_never_follows_redirects() {
     let temporary = tempfile::tempdir().unwrap();
     certificates(temporary.path());
-    let ca = std::fs::read(temporary.path().join("ca.pem")).unwrap();
+    let sunshine_certificate = std::fs::read(temporary.path().join("sunshine.pem")).unwrap();
     let wrong = std::fs::read(temporary.path().join("wrong.pem")).unwrap();
     let fixture = serve(temporary.path(), vec![response(config("28"))]).await;
     assert!(adapter(&fixture, &wrong).read().await.is_err());
@@ -233,7 +252,12 @@ async fn verified_tls_rejects_wrong_ca_and_never_follows_redirects() {
         fixture.requests.lock().unwrap().is_empty(),
         "credentials must not leave on failed TLS"
     );
-    assert!(adapter(&fixture, &ca).read().await.is_ok());
+    assert!(
+        adapter(&fixture, &sunshine_certificate)
+            .read()
+            .await
+            .is_ok()
+    );
     {
         let captured = fixture.requests.lock().unwrap();
         assert_eq!(captured.len(), 1);
@@ -244,7 +268,12 @@ async fn verified_tls_rejects_wrong_ca_and_never_follows_redirects() {
         assert!(!headers.contains("referer:"));
     }
     let redirect = serve(temporary.path(), vec![format!("HTTP/1.1 302 Found\r\nLocation: {}/api/config\r\nContent-Length: 0\r\nConnection: close\r\n\r\n", fixture.endpoint)]).await;
-    assert!(adapter(&redirect, &ca).read().await.is_err());
+    assert!(
+        adapter(&redirect, &sunshine_certificate)
+            .read()
+            .await
+            .is_err()
+    );
     assert_eq!(
         fixture.requests.lock().unwrap().len(),
         1,
@@ -258,7 +287,7 @@ async fn verified_tls_rejects_wrong_ca_and_never_follows_redirects() {
 async fn malformed_success_and_oversized_body_fail_closed() {
     let temporary = tempfile::tempdir().unwrap();
     certificates(temporary.path());
-    let ca = std::fs::read(temporary.path().join("ca.pem")).unwrap();
+    let sunshine_certificate = std::fs::read(temporary.path().join("sunshine.pem")).unwrap();
     let fixture = serve(
         temporary.path(),
         vec![
@@ -267,8 +296,18 @@ async fn malformed_success_and_oversized_body_fail_closed() {
         ],
     )
     .await;
-    assert!(adapter(&fixture, &ca).read().await.is_err());
-    assert!(adapter(&fixture, &ca).read().await.is_err());
+    assert!(
+        adapter(&fixture, &sunshine_certificate)
+            .read()
+            .await
+            .is_err()
+    );
+    assert!(
+        adapter(&fixture, &sunshine_certificate)
+            .read()
+            .await
+            .is_err()
+    );
 }
 
 #[derive(Default)]
@@ -291,7 +330,7 @@ impl Journal for JournalFixture {
 async fn real_https_patch_preserves_original_configuration_and_filters_metadata() {
     let temporary = tempfile::tempdir().unwrap();
     certificates(temporary.path());
-    let ca = std::fs::read(temporary.path().join("ca.pem")).unwrap();
+    let sunshine_certificate = std::fs::read(temporary.path().join("sunshine.pem")).unwrap();
     let fixture = serve(
         temporary.path(),
         vec![
@@ -310,7 +349,7 @@ async fn real_https_patch_preserves_original_configuration_and_filters_metadata(
     let executor = Executor::new(
         binding.clone(),
         false,
-        adapter(&fixture, &ca),
+        adapter(&fixture, &sunshine_certificate),
         JournalFixture::default(),
     );
     let task = Task {
@@ -374,6 +413,7 @@ async fn authenticated_wss_delivers_result_and_revocation_stops_reconnect() {
     let temporary = tempfile::tempdir().unwrap();
     certificates(temporary.path());
     let ca = std::fs::read(temporary.path().join("ca.pem")).unwrap();
+    let sunshine_certificate = std::fs::read(temporary.path().join("sunshine.pem")).unwrap();
     let sunshine = serve(temporary.path(), vec![response(config("28"))]).await;
     let binding = Binding {
         manager_id: uuid::Uuid::from_u128(1),
@@ -383,7 +423,7 @@ async fn authenticated_wss_delivers_result_and_revocation_stops_reconnect() {
     let executor = Arc::new(Executor::new(
         binding.clone(),
         false,
-        adapter(&sunshine, &ca),
+        adapter(&sunshine, &sunshine_certificate),
         JournalFixture::default(),
     ));
     let cert = CertificateDer::from_pem_file(temporary.path().join("server.pem")).unwrap();

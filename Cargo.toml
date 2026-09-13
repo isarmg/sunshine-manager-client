@@ -10,7 +10,7 @@ publish = false
 async-trait = "0.1"
 base64 = "0.22"
 futures-util = { version = "0.3", features = ["sink"] }
-reqwest = { version = "0.13", default-features = false, features = ["json"] }
+reqwest = { version = "0.13", default-features = false, features = ["json", "rustls"] }
 rand = "0.8"
 uuid = { version = "1", features = ["v4", "serde"] }
 sarmg-client-secure-http = { git = "https://github.com/isarmg/sarmg-foundation-client.git", rev = "be2c2e246763c373794ffd1f2228c4005fb94954", version = "=0.8.0" }

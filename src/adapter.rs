@@ -1,17 +1,27 @@
-use std::{collections::BTreeMap, time::Duration};
+use std::{collections::BTreeMap, sync::Arc, time::Duration};
 
 use async_trait::async_trait;
 use base64::{Engine as _, engine::general_purpose::STANDARD};
-use reqwest::{Method, Request, header};
-use sarmg_client_secure_http::{
-    Certificate, NetworkPolicy, ResponseBudget, SecureHttpClient, TlsConfig, TrustMode, Url,
-};
+use reqwest::{Method, Request, header, redirect::Policy};
+use sarmg_client_secure_http::{NetworkPolicy, ResponseBudget, SecureHttpClient, TlsConfig, Url};
 use serde_json::Value;
 use sha2::{Digest, Sha256};
 use sunshine_client_protocol::{ConfigSnapshot, Effectiveness, config::FIELDS};
+use tokio_rustls::rustls::{
+    CertificateError, ClientConfig, DigitallySignedStruct, Error as TlsError, SignatureScheme,
+    client::{
+        Resumption,
+        danger::{HandshakeSignatureValid, ServerCertVerified, ServerCertVerifier},
+    },
+    crypto::{
+        WebPkiSupportedAlgorithms, aws_lc_rs, verify_tls12_signature, verify_tls13_signature,
+    },
+    pki_types::{CertificateDer, ServerName, UnixTime, pem::PemObject},
+};
 use zeroize::Zeroizing;
 
 pub const MAX_CONFIG_BYTES: usize = 512 * 1024;
+const MAX_CERTIFICATE_BYTES: usize = 64 * 1024;
 
 /// Never print upstream errors/bodies: they may include local settings or credentials.
 #[derive(Debug, Clone, Copy, PartialEq, Eq, thiserror::Error)]
@@ -163,9 +173,85 @@ pub trait Sunshine: Send {
 /// Only loopback-literal HTTPS; caller supplies a locally provisioned trust anchor.
 /// No proxy, redirect, arbitrary paths, insecure TLS option, or network credentials in DTOs.
 pub struct LocalSunshine {
-    client: SecureHttpClient,
+    client: LocalClient,
     base: Url,
     authorization: header::HeaderValue,
+}
+
+enum LocalClient {
+    System(SecureHttpClient),
+    Pinned(reqwest::Client),
+}
+
+#[derive(Debug)]
+struct ExactCertificateVerifier {
+    certificate: CertificateDer<'static>,
+    algorithms: WebPkiSupportedAlgorithms,
+}
+
+impl ExactCertificateVerifier {
+    fn from_pem(pem: &[u8]) -> Result<Self, AdapterError> {
+        if pem.is_empty() || pem.len() > MAX_CERTIFICATE_BYTES {
+            return Err(AdapterError::InvalidLocalEndpoint);
+        }
+        let text = std::str::from_utf8(pem).map_err(|_| AdapterError::InvalidLocalEndpoint)?;
+        if text.matches("-----BEGIN CERTIFICATE-----").count() != 1
+            || text.matches("-----END CERTIFICATE-----").count() != 1
+            || text.contains("PRIVATE KEY")
+        {
+            return Err(AdapterError::InvalidLocalEndpoint);
+        }
+        let certificates = CertificateDer::pem_slice_iter(pem)
+            .collect::<Result<Vec<_>, _>>()
+            .map_err(|_| AdapterError::InvalidLocalEndpoint)?;
+        let [certificate] = certificates.as_slice() else {
+            return Err(AdapterError::InvalidLocalEndpoint);
+        };
+        Ok(Self {
+            certificate: certificate.clone().into_owned(),
+            algorithms: aws_lc_rs::default_provider().signature_verification_algorithms,
+        })
+    }
+}
+
+impl ServerCertVerifier for ExactCertificateVerifier {
+    fn verify_server_cert(
+        &self,
+        end_entity: &CertificateDer<'_>,
+        _intermediates: &[CertificateDer<'_>],
+        _server_name: &ServerName<'_>,
+        _ocsp_response: &[u8],
+        _now: UnixTime,
+    ) -> Result<ServerCertVerified, TlsError> {
+        if end_entity.as_ref() != self.certificate.as_ref() {
+            return Err(TlsError::InvalidCertificate(
+                CertificateError::UnknownIssuer,
+            ));
+        }
+        Ok(ServerCertVerified::assertion())
+    }
+
+    fn verify_tls12_signature(
+        &self,
+        message: &[u8],
+        certificate: &CertificateDer<'_>,
+        signature: &DigitallySignedStruct,
+    ) -> Result<HandshakeSignatureValid, TlsError> {
+        verify_tls12_signature(message, certificate, signature, &self.algorithms)
+    }
+
+    fn verify_tls13_signature(
+        &self,
+        message: &[u8],
+        certificate: &CertificateDer<'_>,
+        signature: &DigitallySignedStruct,
+    ) -> Result<HandshakeSignatureValid, TlsError> {
+        verify_tls13_signature(message, certificate, signature, &self.algorithms)
+    }
+
+    fn supported_verify_schemes(&self) -> Vec<SignatureScheme> {
+        self.algorithms.supported_schemes()
+    }
 }
 
 impl LocalSunshine {
@@ -173,7 +259,7 @@ impl LocalSunshine {
         endpoint: &str,
         username: &str,
         password: Zeroizing<String>,
-        root_pem: &[u8],
+        sunshine_certificate_pem: &[u8],
     ) -> Result<Self, AdapterError> {
         let base = Url::parse(endpoint).map_err(|_| AdapterError::InvalidLocalEndpoint)?;
         validate_local_endpoint(&base)?;
@@ -186,26 +272,42 @@ impl LocalSunshine {
         {
             return Err(AdapterError::InvalidLocalEndpoint);
         }
-        let trust = if root_pem.is_empty() {
-            TrustMode::System
+        let client = if sunshine_certificate_pem.is_empty() {
+            LocalClient::System(
+                SecureHttpClient::new(
+                    Duration::from_secs(15),
+                    ResponseBudget {
+                        max_header_bytes: 16 * 1024,
+                        max_body_bytes: MAX_CONFIG_BYTES,
+                    },
+                    TlsConfig::default(),
+                    format!("sunshine-client/{}", env!("CARGO_PKG_VERSION")),
+                )
+                .map_err(|_| AdapterError::InvalidLocalEndpoint)?,
+            )
         } else {
-            TrustMode::CustomOnly(vec![
-                Certificate::from_pem(root_pem).map_err(|_| AdapterError::InvalidLocalEndpoint)?,
-            ])
+            let verifier = Arc::new(ExactCertificateVerifier::from_pem(
+                sunshine_certificate_pem,
+            )?);
+            let mut tls = ClientConfig::builder()
+                .dangerous()
+                .with_custom_certificate_verifier(verifier)
+                .with_no_client_auth();
+            // Re-check the exact leaf on every connection; a resumed session may omit it.
+            tls.resumption = Resumption::disabled();
+            let client = reqwest::Client::builder()
+                .timeout(Duration::from_secs(15))
+                .connect_timeout(Duration::from_secs(10))
+                .redirect(Policy::none())
+                .no_proxy()
+                .https_only(true)
+                .http2_max_header_list_size(16 * 1024)
+                .user_agent(format!("sunshine-client/{}", env!("CARGO_PKG_VERSION")))
+                .tls_backend_preconfigured(tls)
+                .build()
+                .map_err(|_| AdapterError::InvalidLocalEndpoint)?;
+            LocalClient::Pinned(client)
         };
-        let client = SecureHttpClient::new(
-            Duration::from_secs(15),
-            ResponseBudget {
-                max_header_bytes: 16 * 1024,
-                max_body_bytes: MAX_CONFIG_BYTES,
-            },
-            TlsConfig {
-                identity: None,
-                trust,
-            },
-            format!("sunshine-client/{}", env!("CARGO_PKG_VERSION")),
-        )
-        .map_err(|_| AdapterError::InvalidLocalEndpoint)?;
         let raw = Zeroizing::new(format!("{username}:{}", password.as_str()));
         let encoded = Zeroizing::new(format!("Basic {}", STANDARD.encode(raw.as_bytes())));
         let mut authorization = header::HeaderValue::from_str(&encoded)
@@ -241,22 +343,63 @@ impl LocalSunshine {
             *request.body_mut() = Some(body.into());
         }
         // Non-browser local client: no Origin/Referer. The pinned release explicitly supports this.
-        let response = self
-            .client
-            .execute(
-                NetworkPolicy::PrivateDevice {
-                    allow_loopback: true,
-                    allow_link_local: false,
-                },
-                request,
-            )
-            .await
-            .map_err(|_| AdapterError::Unavailable)?;
-        if !response.status.is_success() {
+        let (status, bytes) = match &self.client {
+            LocalClient::System(client) => {
+                let response = client
+                    .execute(
+                        NetworkPolicy::PrivateDevice {
+                            allow_loopback: true,
+                            allow_link_local: false,
+                        },
+                        request,
+                    )
+                    .await
+                    .map_err(|_| AdapterError::Unavailable)?;
+                (response.status, response.body)
+            }
+            LocalClient::Pinned(client) => {
+                let mut response = client
+                    .execute(request)
+                    .await
+                    .map_err(|_| AdapterError::Unavailable)?;
+                let header_bytes = response
+                    .headers()
+                    .iter()
+                    .try_fold(0usize, |total, (name, value)| {
+                        total.checked_add(name.as_str().len() + value.as_bytes().len() + 4)
+                    })
+                    .ok_or(AdapterError::Unavailable)?;
+                if header_bytes > 16 * 1024
+                    || response
+                        .content_length()
+                        .is_some_and(|length| length > MAX_CONFIG_BYTES as u64)
+                {
+                    return Err(AdapterError::Unavailable);
+                }
+                let status = response.status();
+                let mut body = Vec::new();
+                while let Some(chunk) = response
+                    .chunk()
+                    .await
+                    .map_err(|_| AdapterError::Unavailable)?
+                {
+                    if body
+                        .len()
+                        .checked_add(chunk.len())
+                        .is_none_or(|length| length > MAX_CONFIG_BYTES)
+                    {
+                        return Err(AdapterError::Unavailable);
+                    }
+                    body.extend_from_slice(&chunk);
+                }
+                (status, body)
+            }
+        };
+        if !status.is_success() {
             return Err(AdapterError::Unavailable);
         }
-        let value: Value = serde_json::from_slice(&response.body)
-            .map_err(|_| AdapterError::UnsafeConfiguration)?;
+        let value: Value =
+            serde_json::from_slice(&bytes).map_err(|_| AdapterError::UnsafeConfiguration)?;
         if value.get("status") != Some(&Value::Bool(true)) {
             return Err(AdapterError::Unavailable);
         }
@@ -297,5 +440,52 @@ impl Sunshine for LocalSunshine {
     async fn restart(&mut self) -> Result<(), AdapterError> {
         self.request(Method::POST, "/api/restart", None).await?;
         Ok(())
+    }
+}
+
+#[cfg(test)]
+mod certificate_tests {
+    use super::*;
+
+    #[test]
+    fn pinned_verifier_accepts_only_the_configured_certificate() {
+        let verifier = ExactCertificateVerifier {
+            certificate: CertificateDer::from(vec![1, 2, 3]),
+            algorithms: aws_lc_rs::default_provider().signature_verification_algorithms,
+        };
+        let name = ServerName::try_from("127.0.0.1").unwrap();
+        assert!(
+            verifier
+                .verify_server_cert(
+                    &CertificateDer::from(vec![1, 2, 3]),
+                    &[],
+                    &name,
+                    &[],
+                    UnixTime::since_unix_epoch(Duration::from_secs(0)),
+                )
+                .is_ok()
+        );
+        assert!(
+            verifier
+                .verify_server_cert(
+                    &CertificateDer::from(vec![3, 2, 1]),
+                    &[],
+                    &name,
+                    &[],
+                    UnixTime::since_unix_epoch(Duration::from_secs(0)),
+                )
+                .is_err()
+        );
+    }
+
+    #[test]
+    fn certificate_input_rejects_private_keys_and_multiple_or_malformed_certificates() {
+        for pem in [
+            b"-----BEGIN PRIVATE KEY-----\nAA==\n-----END PRIVATE KEY-----\n".as_slice(),
+            b"-----BEGIN CERTIFICATE-----\nAA==\n-----END CERTIFICATE-----\n-----BEGIN CERTIFICATE-----\nAA==\n-----END CERTIFICATE-----\n".as_slice(),
+            b"-----BEGIN CERTIFICATE-----\nnot-base64\n-----END CERTIFICATE-----\n".as_slice(),
+        ] {
+            assert!(ExactCertificateVerifier::from_pem(pem).is_err());
+        }
     }
 }

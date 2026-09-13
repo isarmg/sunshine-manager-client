@@ -237,9 +237,16 @@ pub fn redact(value: &mut Value) {
     match value {
         Value::Object(map) => {
             for (key, v) in map.iter_mut() {
-                if ["password", "token", "credential", "secret", "enrollment"]
-                    .iter()
-                    .any(|k| key.contains(k))
+                if [
+                    "password",
+                    "token",
+                    "credential",
+                    "secret",
+                    "enrollment",
+                    "certificate",
+                ]
+                .iter()
+                .any(|k| key.contains(k))
                     && (v.is_string() || v.is_null())
                 {
                     *v = json!({"configured":!v.is_null() && v.as_str().is_none_or(|s|!s.is_empty())});

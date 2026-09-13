@@ -3,6 +3,7 @@ use crate::{
     provisioning::{self, Bootstrap, Identity, ProvisionError},
     storage::{MaintenanceGuard, ProtectedState},
 };
+use rand::RngCore;
 use serde::{Deserialize, Serialize};
 use serde_json::{Value, json};
 use std::path::{Path, PathBuf};
@@ -65,8 +66,12 @@ fn provision_error(e: ProvisionError) -> Failure {
 #[serde(deny_unknown_fields)]
 struct PairInput {
     server: String,
-    pairing_code: Zeroizing<String>,
+    authorization_code: Zeroizing<String>,
     sunshine_endpoint: String,
+    #[serde(default)]
+    sunshine_certificate: Option<String>,
+    #[serde(default)]
+    sunshine_certificate_path: Option<PathBuf>,
     sunshine_username: Zeroizing<String>,
     sunshine_password: Zeroizing<String>,
     #[serde(default)]
@@ -86,10 +91,21 @@ impl PairInput {
         }
         url.set_scheme("wss").map_err(input_error)?;
         url.set_path("/sunshine-client/v1/connect");
+        if self.sunshine_certificate.is_some() && self.sunshine_certificate_path.is_some() {
+            return Err(fail(2, "duplicate_sunshine_certificate_source"));
+        }
+        let sunshine_certificate = match (self.sunshine_certificate, self.sunshine_certificate_path)
+        {
+            (Some(pem), None) => Some(pem),
+            (None, Some(path)) => Some(read_sunshine_certificate(&path)?),
+            (None, None) => None,
+            (Some(_), Some(_)) => unreachable!(),
+        };
         let b = Bootstrap {
             manager_endpoint: url.to_string(),
-            enrollment_token: self.pairing_code,
+            enrollment_token: self.authorization_code,
             sunshine_endpoint: self.sunshine_endpoint,
+            sunshine_certificate,
             sunshine_username: self.sunshine_username,
             sunshine_password: self.sunshine_password,
             restart_allowed: self.restart_allowed,
@@ -97,6 +113,21 @@ impl PairInput {
         b.validate().map_err(provision_error)?;
         Ok(b)
     }
+}
+
+fn read_sunshine_certificate(path: &Path) -> Result<String> {
+    if !path.is_absolute() {
+        return Err(fail(2, "sunshine_certificate_path_must_be_absolute"));
+    }
+    let metadata = std::fs::symlink_metadata(path).map_err(input_error)?;
+    if !metadata.is_file() || metadata.file_type().is_symlink() || metadata.len() > 64 * 1024 {
+        return Err(fail(2, "invalid_sunshine_certificate_file"));
+    }
+    let bytes = std::fs::read(path).map_err(input_error)?;
+    if bytes.len() > 64 * 1024 {
+        return Err(fail(2, "invalid_sunshine_certificate_file"));
+    }
+    String::from_utf8(bytes).map_err(input_error)
 }
 #[derive(Deserialize, Serialize)]
 #[serde(deny_unknown_fields)]
@@ -147,6 +178,7 @@ fn current(store: &ProtectedState) -> Result<(Bootstrap, Option<Identity>)> {
                 manager_endpoint: String::new(),
                 enrollment_token: Zeroizing::new(String::new()),
                 sunshine_endpoint: settings.sunshine_endpoint,
+                sunshine_certificate: None,
                 sunshine_username: Zeroizing::new(String::new()),
                 sunshine_password: Zeroizing::new(String::new()),
                 restart_allowed: settings.restart_allowed,
@@ -349,6 +381,7 @@ fn execute_pair(args: &Args, path: &Path) -> Result<Value> {
     let words: Vec<_> = args.words.iter().map(String::as_str).collect();
     args.validate_options(&["--interactive", "--input-stdin", "--server"])?;
     let resume = words == ["pair", "resume"];
+    let replace = words == ["pair", "replace"];
     if resume && (args.has("--interactive") || args.has("--input-stdin") || args.has("--server")) {
         return Err(fail(2, "resume_uses_existing_transaction"));
     }
@@ -360,8 +393,16 @@ fn execute_pair(args: &Args, path: &Path) -> Result<Value> {
                 } else {
                     prompt("Server HTTPS origin", false)?
                 },
-                pairing_code: Zeroizing::new(prompt("Pairing code", true)?),
+                authorization_code: Zeroizing::new(prompt("Authorization code", true)?),
                 sunshine_endpoint: prompt("Local Sunshine HTTPS URL", false)?,
+                sunshine_certificate: None,
+                sunshine_certificate_path: match prompt(
+                    "Sunshine cacert.pem absolute path (blank for system trust)",
+                    false,
+                )? {
+                    value if value.is_empty() => None,
+                    value => Some(PathBuf::from(value)),
+                },
                 sunshine_username: Zeroizing::new(prompt("Sunshine username", false)?),
                 sunshine_password: Zeroizing::new(prompt("Sunshine password", true)?),
                 restart_allowed: prompt("Allow controlled restart? [no]", false)? == "yes",
@@ -377,6 +418,9 @@ fn execute_pair(args: &Args, path: &Path) -> Result<Value> {
     } else {
         None
     };
+    if replace && incoming.is_none() {
+        return Err(fail(2, "replacement_requires_protected_input"));
+    }
     let _guard = MaintenanceGuard::acquire(path).map_err(storage_error)?;
     let store = ProtectedState::open(&path.join("provisioning")).map_err(storage_error)?;
     let existing = identity(&store)?;
@@ -384,9 +428,28 @@ fn execute_pair(args: &Args, path: &Path) -> Result<Value> {
         return Err(fail(4, "no_pairing_transaction"));
     }
     if let Some(b) = incoming {
-        if let Some(id) = existing {
+        if replace {
+            let mut id = existing.ok_or_else(|| fail(4, "no_existing_binding"))?;
+            if !id.enrolled {
+                return Err(fail(5, "pending_pairing_must_be_resumed"));
+            }
+            if id.config.manager_endpoint != b.manager_endpoint {
+                return Err(fail(5, "server_replacement_requires_retirement"));
+            }
+            tokio::runtime::Runtime::new()
+                .map_err(storage_error)?
+                .block_on(provisioning::validate_replacement(&b, &id.binding))
+                .map_err(provision_error)?;
+            let mut random = [0u8; 32];
+            rand::rngs::OsRng.fill_bytes(&mut random);
+            id.credential =
+                Zeroizing::new(random.iter().map(|byte| format!("{byte:02x}")).collect());
+            id.config = b;
+            id.enrolled = false;
+            id.persist(&store).map_err(provision_error)?;
+        } else if let Some(id) = existing {
             if id.enrolled || id.config != b {
-                return Err(fail(5, "binding_replacement_requires_retirement"));
+                return Err(fail(5, "binding_replacement_requires_pair_replace"));
             }
         } else if b.enrollment_token.is_empty() {
             store
@@ -677,7 +740,7 @@ pub fn entry(raw: Vec<String>) -> u8 {
     }
     if args.has("--help") {
         println!(
-            "sunshine-client: setup; config init|show|validate|diff|apply; pair [status|resume]; credentials update; status; doctor; service status|start|stop|restart|enable|disable; run; version\nGlobal: --format human|json|ndjson --non-interactive --timeout 60s --no-color --config ABSOLUTE_STATE_DIRECTORY (--state compatibility alias)\nsetup/pair uses --interactive or --input-stdin; setup completes pairing, service startup policy and connection verification. No secret arguments. Configuration apply requires --expected-revision. Services must be stopped for writes."
+            "sunshine-client: setup; config init|show|validate|diff|apply; pair [status|resume|replace]; credentials update; status; doctor; service status|start|stop|restart|enable|disable; run; version\nGlobal: --format human|json|ndjson --non-interactive --timeout 60s --no-color --config ABSOLUTE_STATE_DIRECTORY (--state compatibility alias)\nsetup/pair uses --interactive or --input-stdin. Sunshine's built-in certificate is accepted only when sunshine_certificate_path or sunshine_certificate is supplied through protected input. setup completes pairing, service startup policy and connection verification. No secret arguments. Configuration apply requires --expected-revision. Services must be stopped for writes."
         );
         return 0;
     }
@@ -948,7 +1011,7 @@ fn execute(args: &Args) -> Result<Value> {
                 .map_err(storage_error)?;
             Ok(json!({"imported":true,"next_step":"pair explicitly before starting service"}))
         }
-        ["pair"] | ["pair", "resume"] => execute_pair(args, &path),
+        ["pair"] | ["pair", "resume"] | ["pair", "replace"] => execute_pair(args, &path),
         ["run"] => {
             args.validate_options(&[])?;
             run(&path)?;

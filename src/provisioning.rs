@@ -23,6 +23,8 @@ pub struct Bootstrap {
     pub manager_endpoint: String,
     pub enrollment_token: Zeroizing<String>,
     pub sunshine_endpoint: String,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub sunshine_certificate: Option<String>,
     pub sunshine_username: Zeroizing<String>,
     pub sunshine_password: Zeroizing<String>,
     #[serde(default)]
@@ -95,7 +97,10 @@ impl Bootstrap {
             &self.sunshine_endpoint,
             &self.sunshine_username,
             self.sunshine_password.clone(),
-            &[],
+            self.sunshine_certificate
+                .as_deref()
+                .unwrap_or_default()
+                .as_bytes(),
         )
         .map_err(config_error)
     }
@@ -136,9 +141,11 @@ async fn resolve_pairing(config: &Bootstrap) -> Result<PairingTarget, ProvisionE
         reqwest::header::HeaderValue::from_static("application/json"),
     );
     *request.body_mut() = Some(
-        serde_json::to_vec(&serde_json::json!({"token":config.enrollment_token.as_str()}))
-            .map_err(config_error)?
-            .into(),
+        serde_json::to_vec(
+            &serde_json::json!({"authorization_code":config.enrollment_token.as_str()}),
+        )
+        .map_err(config_error)?
+        .into(),
     );
     let response = system_client()?
         .execute(
@@ -158,6 +165,16 @@ async fn resolve_pairing(config: &Bootstrap) -> Result<PairingTarget, ProvisionE
         return Err(ProvisionError::Configuration);
     }
     Ok(target)
+}
+pub(crate) async fn validate_replacement(
+    config: &Bootstrap,
+    binding: &Binding,
+) -> Result<(), ProvisionError> {
+    let target = resolve_pairing(config).await?;
+    if target.manager_id != binding.manager_id || target.device_id != binding.device_id {
+        return Err(ProvisionError::Configuration);
+    }
+    Ok(())
 }
 /// Persist independent random identity before enrollment. Never regenerate on retry.
 async fn provision(
@@ -361,15 +378,16 @@ pub async fn run(state_path: &Path, shutdown: watch::Receiver<bool>) -> Result<(
 mod bootstrap_tests {
     fn configuration() -> serde_json::Value {
         serde_json::json!({"manager_endpoint":"wss://manager.example.org/sunshine-client/v1/connect", "enrollment_token":"a".repeat(64),
-            "sunshine_endpoint":"https://127.0.0.1:47990/", "sunshine_username":"fixture", "sunshine_password":"local-only", "restart_allowed":false})
+            "sunshine_endpoint":"https://127.0.0.1:47990/", "sunshine_certificate":null, "sunshine_username":"fixture", "sunshine_password":"local-only", "restart_allowed":false})
     }
     #[test]
-    fn bootstrap_only_accepts_system_trust_and_server_resolved_binding() {
+    fn bootstrap_accepts_pinned_sunshine_certificate_and_server_resolved_binding() {
         let config = configuration();
         assert!(super::validate_bootstrap(&serde_json::to_vec(&config).unwrap()).is_ok());
         for field in [
             "manager_ca_pem",
             "sunshine_ca_pem",
+            "sunshine_certificate_path",
             "manager_id",
             "device_id",
         ] {
