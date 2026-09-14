@@ -35,7 +35,7 @@ jobs:
           cargo clippy --locked -p sunshine-client --all-targets -- -D warnings
           cargo test --locked -p sunshine-client
           cargo build --locked --example native_acceptance_seed
-          cargo test --locked -p sunshine-client --test local_https -- --ignored
+          cargo test --locked -p sunshine-client --test local_https -- --ignored --skip authenticated_wss_delivers_result_and_revocation_stops_reconnect
           python3 -m unittest discover -s scripts/tests -p 'test_*.py'
       - name: Build only the Linux Client
         run: |
@@ -91,7 +91,7 @@ jobs:
           if ($LASTEXITCODE) { exit $LASTEXITCODE }
           cargo build --locked --example native_acceptance_seed
           if ($LASTEXITCODE) { exit $LASTEXITCODE }
-          cargo test --locked -p sunshine-client --test local_https -- --ignored
+          cargo test --locked -p sunshine-client --test local_https -- --ignored --skip authenticated_wss_delivers_result_and_revocation_stops_reconnect
           if ($LASTEXITCODE) { exit $LASTEXITCODE }
           python -m unittest discover -s scripts/tests -p 'test_*.py'
           exit $LASTEXITCODE

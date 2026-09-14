@@ -1,6 +1,6 @@
 # CLI 预发布兼容矩阵
 
-当前正式版本为 `0.1.3`，支持 Windows x64、Linux x64 和 macOS Apple Silicon；Intel macOS 不再适配或发行。部署时同时核对版本与源码身份。
+当前正式版本为 `0.1.4`，支持 Windows x64、Linux x64 和 macOS Apple Silicon；Intel macOS 不再适配或发行。部署时同时核对版本与源码身份。
 
 | 维度 | 契约 |
 | --- | --- |
