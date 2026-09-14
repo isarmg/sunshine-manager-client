@@ -247,7 +247,10 @@ async fn pinned_builtin_certificate_rejects_mismatch_and_never_follows_redirects
     let sunshine_certificate = std::fs::read(temporary.path().join("sunshine.pem")).unwrap();
     let wrong = std::fs::read(temporary.path().join("wrong.pem")).unwrap();
     let fixture = serve(temporary.path(), vec![response(config("28"))]).await;
-    assert!(adapter(&fixture, &wrong).read().await.is_err());
+    assert!(matches!(
+        adapter(&fixture, &wrong).read().await,
+        Err(AdapterError::CertificateMismatch)
+    ));
     assert!(
         fixture.requests.lock().unwrap().is_empty(),
         "credentials must not leave on failed TLS"
@@ -284,6 +287,26 @@ async fn pinned_builtin_certificate_rejects_mismatch_and_never_follows_redirects
 
 #[tokio::test]
 #[ignore = "requires loopback sockets and openssl"]
+async fn system_trust_reports_an_untrusted_sunshine_certificate() {
+    let temporary = tempfile::tempdir().unwrap();
+    certificates(temporary.path());
+    let fixture = serve(temporary.path(), vec![response(config("28"))]).await;
+    let mut adapter = LocalSunshine::new(
+        &fixture.endpoint,
+        "fixture",
+        Zeroizing::new("local-test-password".into()),
+        &[],
+    )
+    .unwrap();
+    let result = adapter.read().await.err();
+    assert!(
+        matches!(result, Some(AdapterError::CertificateUntrusted)),
+        "unexpected result: {result:?}"
+    );
+}
+
+#[tokio::test]
+#[ignore = "requires loopback sockets and openssl"]
 async fn malformed_success_and_oversized_body_fail_closed() {
     let temporary = tempfile::tempdir().unwrap();
     certificates(temporary.path());
@@ -308,6 +331,40 @@ async fn malformed_success_and_oversized_body_fail_closed() {
             .await
             .is_err()
     );
+}
+
+#[tokio::test]
+#[ignore = "requires loopback sockets and openssl"]
+async fn sunshine_http_credentials_api_and_version_failures_are_distinct() {
+    let temporary = tempfile::tempdir().unwrap();
+    certificates(temporary.path());
+    let certificate = std::fs::read(temporary.path().join("sunshine.pem")).unwrap();
+    let fixture = serve(
+        temporary.path(),
+        vec![
+            "HTTP/1.1 401 Unauthorized\r\nContent-Length: 0\r\nConnection: close\r\n\r\n".into(),
+            "HTTP/1.1 503 Service Unavailable\r\nContent-Length: 0\r\nConnection: close\r\n\r\n"
+                .into(),
+            response(serde_json::json!({
+                "status": true,
+                "platform": "windows",
+                "version": "999.0.0"
+            })),
+        ],
+    )
+    .await;
+    assert!(matches!(
+        adapter(&fixture, &certificate).read().await,
+        Err(AdapterError::CredentialsRejected)
+    ));
+    assert!(matches!(
+        adapter(&fixture, &certificate).read().await,
+        Err(AdapterError::ApiUnavailable)
+    ));
+    assert!(matches!(
+        adapter(&fixture, &certificate).read().await,
+        Err(AdapterError::UnsupportedVersion)
+    ));
 }
 
 #[derive(Default)]
@@ -390,8 +447,8 @@ async fn real_https_patch_preserves_original_configuration_and_filters_metadata(
 #[test]
 fn credentials_are_not_formatted_in_adapter_errors() {
     assert_eq!(
-        AdapterError::Unavailable.to_string(),
-        "local Sunshine HTTPS request failed"
+        AdapterError::ApiUnavailable.to_string(),
+        "Sunshine HTTPS API is unavailable"
     );
 }
 

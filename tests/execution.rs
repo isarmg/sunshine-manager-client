@@ -55,7 +55,7 @@ impl Sunshine for FakeSunshine {
         let mut fixture = self.0.lock().unwrap();
         fixture.reads += 1;
         if fixture.fail_read {
-            return Err(AdapterError::Unavailable);
+            return Err(AdapterError::ApiUnavailable);
         }
         if fixture.conflict_on_second_read && fixture.reads == 2 {
             fixture.configuration = configuration("30");
@@ -67,7 +67,7 @@ impl Sunshine for FakeSunshine {
         fixture.saves += 1;
         fixture.configuration = configuration.clone();
         if fixture.lose_write_receipt {
-            Err(AdapterError::Unavailable)
+            Err(AdapterError::ApiUnavailable)
         } else {
             Ok(())
         }
@@ -76,7 +76,7 @@ impl Sunshine for FakeSunshine {
         let mut fixture = self.0.lock().unwrap();
         fixture.restarts += 1;
         if fixture.lose_restart_receipt {
-            Err(AdapterError::Unavailable)
+            Err(AdapterError::ApiUnavailable)
         } else {
             Ok(())
         }

@@ -264,9 +264,11 @@ fn rejected_adapter(error: AdapterError) -> Report {
         reason: match error {
             AdapterError::UnsupportedVersion => Rejection::UnsupportedVersion,
             AdapterError::UnsafeConfiguration => Rejection::UnsafeConfiguration,
-            AdapterError::Unavailable | AdapterError::InvalidLocalEndpoint => {
-                Rejection::SunshineUnavailable
-            }
+            AdapterError::CertificateUntrusted
+            | AdapterError::CertificateMismatch
+            | AdapterError::CredentialsRejected
+            | AdapterError::ApiUnavailable
+            | AdapterError::InvalidLocalEndpoint => Rejection::SunshineUnavailable,
         },
     }
 }

@@ -1,9 +1,18 @@
-use std::{collections::BTreeMap, sync::Arc, time::Duration};
+use std::{
+    collections::BTreeMap,
+    error::Error as StdError,
+    sync::{
+        Arc,
+        atomic::{AtomicBool, Ordering},
+    },
+    time::Duration,
+};
 
 use async_trait::async_trait;
 use base64::{Engine as _, engine::general_purpose::STANDARD};
 use reqwest::{Method, Request, header, redirect::Policy};
-use sarmg_client_secure_http::{NetworkPolicy, ResponseBudget, SecureHttpClient, TlsConfig, Url};
+use rustls_platform_verifier::ConfigVerifierExt;
+use sarmg_client_secure_http::Url;
 use serde_json::Value;
 use sha2::{Digest, Sha256};
 use sunshine_client_protocol::{ConfigSnapshot, Effectiveness, config::FIELDS};
@@ -26,8 +35,14 @@ const MAX_CERTIFICATE_BYTES: usize = 64 * 1024;
 /// Never print upstream errors/bodies: they may include local settings or credentials.
 #[derive(Debug, Clone, Copy, PartialEq, Eq, thiserror::Error)]
 pub enum AdapterError {
-    #[error("local Sunshine HTTPS request failed")]
-    Unavailable,
+    #[error("Sunshine certificate is not trusted by the selected system trust store")]
+    CertificateUntrusted,
+    #[error("Sunshine presented a certificate different from the configured pin")]
+    CertificateMismatch,
+    #[error("Sunshine rejected the configured local credentials")]
+    CredentialsRejected,
+    #[error("Sunshine HTTPS API is unavailable")]
+    ApiUnavailable,
     #[error("unsupported Sunshine version")]
     UnsupportedVersion,
     #[error("unsafe or malformed Sunshine configuration")]
@@ -50,7 +65,7 @@ impl Configuration {
             .cloned()
             .ok_or(AdapterError::UnsafeConfiguration)?;
         if response.remove("status") != Some(Value::Bool(true)) {
-            return Err(AdapterError::Unavailable);
+            return Err(AdapterError::ApiUnavailable);
         }
         let sunshine_version = response
             .remove("version")
@@ -179,14 +194,18 @@ pub struct LocalSunshine {
 }
 
 enum LocalClient {
-    System(SecureHttpClient),
-    Pinned(reqwest::Client),
+    System(reqwest::Client),
+    Pinned {
+        client: reqwest::Client,
+        mismatch_seen: Arc<AtomicBool>,
+    },
 }
 
 #[derive(Debug)]
 struct ExactCertificateVerifier {
     certificate: CertificateDer<'static>,
     algorithms: WebPkiSupportedAlgorithms,
+    mismatch_seen: Arc<AtomicBool>,
 }
 
 impl ExactCertificateVerifier {
@@ -210,6 +229,7 @@ impl ExactCertificateVerifier {
         Ok(Self {
             certificate: certificate.clone().into_owned(),
             algorithms: aws_lc_rs::default_provider().signature_verification_algorithms,
+            mismatch_seen: Arc::new(AtomicBool::new(false)),
         })
     }
 }
@@ -224,6 +244,7 @@ impl ServerCertVerifier for ExactCertificateVerifier {
         _now: UnixTime,
     ) -> Result<ServerCertVerified, TlsError> {
         if end_entity.as_ref() != self.certificate.as_ref() {
+            self.mismatch_seen.store(true, Ordering::Release);
             return Err(TlsError::InvalidCertificate(
                 CertificateError::UnknownIssuer,
             ));
@@ -273,22 +294,26 @@ impl LocalSunshine {
             return Err(AdapterError::InvalidLocalEndpoint);
         }
         let client = if sunshine_certificate_pem.is_empty() {
+            let tls = ClientConfig::with_platform_verifier()
+                .map_err(|_| AdapterError::InvalidLocalEndpoint)?;
             LocalClient::System(
-                SecureHttpClient::new(
-                    Duration::from_secs(15),
-                    ResponseBudget {
-                        max_header_bytes: 16 * 1024,
-                        max_body_bytes: MAX_CONFIG_BYTES,
-                    },
-                    TlsConfig::default(),
-                    format!("sunshine-client/{}", env!("CARGO_PKG_VERSION")),
-                )
-                .map_err(|_| AdapterError::InvalidLocalEndpoint)?,
+                reqwest::Client::builder()
+                    .timeout(Duration::from_secs(15))
+                    .connect_timeout(Duration::from_secs(10))
+                    .redirect(Policy::none())
+                    .no_proxy()
+                    .https_only(true)
+                    .http2_max_header_list_size(16 * 1024)
+                    .user_agent(format!("sunshine-client/{}", env!("CARGO_PKG_VERSION")))
+                    .tls_backend_preconfigured(tls)
+                    .build()
+                    .map_err(|_| AdapterError::InvalidLocalEndpoint)?,
             )
         } else {
             let verifier = Arc::new(ExactCertificateVerifier::from_pem(
                 sunshine_certificate_pem,
             )?);
+            let mismatch_seen = Arc::clone(&verifier.mismatch_seen);
             let mut tls = ClientConfig::builder()
                 .dangerous()
                 .with_custom_certificate_verifier(verifier)
@@ -306,7 +331,10 @@ impl LocalSunshine {
                 .tls_backend_preconfigured(tls)
                 .build()
                 .map_err(|_| AdapterError::InvalidLocalEndpoint)?;
-            LocalClient::Pinned(client)
+            LocalClient::Pinned {
+                client,
+                mismatch_seen,
+            }
         };
         let raw = Zeroizing::new(format!("{username}:{}", password.as_str()));
         let encoded = Zeroizing::new(format!("Basic {}", STANDARD.encode(raw.as_bytes())));
@@ -345,66 +373,143 @@ impl LocalSunshine {
         // Non-browser local client: no Origin/Referer. The pinned release explicitly supports this.
         let (status, bytes) = match &self.client {
             LocalClient::System(client) => {
-                let response = client
-                    .execute(
-                        NetworkPolicy::PrivateDevice {
-                            allow_loopback: true,
-                            allow_link_local: false,
-                        },
-                        request,
-                    )
-                    .await
-                    .map_err(|_| AdapterError::Unavailable)?;
-                (response.status, response.body)
-            }
-            LocalClient::Pinned(client) => {
-                let mut response = client
-                    .execute(request)
-                    .await
-                    .map_err(|_| AdapterError::Unavailable)?;
+                let mut response = client.execute(request).await.map_err(|error| {
+                    if error_chain_has_certificate_error(&error) {
+                        AdapterError::CertificateUntrusted
+                    } else {
+                        AdapterError::ApiUnavailable
+                    }
+                })?;
                 let header_bytes = response
                     .headers()
                     .iter()
                     .try_fold(0usize, |total, (name, value)| {
                         total.checked_add(name.as_str().len() + value.as_bytes().len() + 4)
                     })
-                    .ok_or(AdapterError::Unavailable)?;
+                    .ok_or(AdapterError::ApiUnavailable)?;
                 if header_bytes > 16 * 1024
                     || response
                         .content_length()
                         .is_some_and(|length| length > MAX_CONFIG_BYTES as u64)
                 {
-                    return Err(AdapterError::Unavailable);
+                    return Err(AdapterError::ApiUnavailable);
                 }
                 let status = response.status();
                 let mut body = Vec::new();
                 while let Some(chunk) = response
                     .chunk()
                     .await
-                    .map_err(|_| AdapterError::Unavailable)?
+                    .map_err(|_| AdapterError::ApiUnavailable)?
                 {
                     if body
                         .len()
                         .checked_add(chunk.len())
                         .is_none_or(|length| length > MAX_CONFIG_BYTES)
                     {
-                        return Err(AdapterError::Unavailable);
+                        return Err(AdapterError::ApiUnavailable);
+                    }
+                    body.extend_from_slice(&chunk);
+                }
+                (status, body)
+            }
+            LocalClient::Pinned {
+                client,
+                mismatch_seen,
+            } => {
+                mismatch_seen.store(false, Ordering::Release);
+                let mut response = client.execute(request).await.map_err(|_| {
+                    if mismatch_seen.swap(false, Ordering::AcqRel) {
+                        AdapterError::CertificateMismatch
+                    } else {
+                        AdapterError::ApiUnavailable
+                    }
+                })?;
+                let header_bytes = response
+                    .headers()
+                    .iter()
+                    .try_fold(0usize, |total, (name, value)| {
+                        total.checked_add(name.as_str().len() + value.as_bytes().len() + 4)
+                    })
+                    .ok_or(AdapterError::ApiUnavailable)?;
+                if header_bytes > 16 * 1024
+                    || response
+                        .content_length()
+                        .is_some_and(|length| length > MAX_CONFIG_BYTES as u64)
+                {
+                    return Err(AdapterError::ApiUnavailable);
+                }
+                let status = response.status();
+                let mut body = Vec::new();
+                while let Some(chunk) = response
+                    .chunk()
+                    .await
+                    .map_err(|_| AdapterError::ApiUnavailable)?
+                {
+                    if body
+                        .len()
+                        .checked_add(chunk.len())
+                        .is_none_or(|length| length > MAX_CONFIG_BYTES)
+                    {
+                        return Err(AdapterError::ApiUnavailable);
                     }
                     body.extend_from_slice(&chunk);
                 }
                 (status, body)
             }
         };
+        if matches!(status.as_u16(), 401 | 403) {
+            return Err(AdapterError::CredentialsRejected);
+        }
+        if status.as_u16() == 426 {
+            return Err(AdapterError::UnsupportedVersion);
+        }
         if !status.is_success() {
-            return Err(AdapterError::Unavailable);
+            return Err(AdapterError::ApiUnavailable);
         }
         let value: Value =
             serde_json::from_slice(&bytes).map_err(|_| AdapterError::UnsafeConfiguration)?;
         if value.get("status") != Some(&Value::Bool(true)) {
-            return Err(AdapterError::Unavailable);
+            return Err(AdapterError::ApiUnavailable);
         }
         Ok(value)
     }
+}
+
+fn error_chain_has_certificate_error(error: &(dyn StdError + 'static)) -> bool {
+    fn contains(error: &(dyn StdError + 'static), depth: usize) -> bool {
+        if depth > 16 {
+            return false;
+        }
+        if matches!(
+            error.downcast_ref::<TlsError>(),
+            Some(TlsError::InvalidCertificate(_))
+        ) {
+            return true;
+        }
+        // hyper-rustls wraps the TLS failure in nested `io::Error` values whose
+        // inner error is not always exposed through `Error::source`.
+        if let Some(io) = error.downcast_ref::<std::io::Error>()
+            && let Some(inner) = io.get_ref()
+            && contains(inner, depth + 1)
+        {
+            return true;
+        }
+        error
+            .source()
+            .is_some_and(|source| contains(source, depth + 1))
+    }
+
+    contains(error, 0)
+}
+
+pub(crate) fn certificate_sha256_fingerprint(pem: &[u8]) -> Result<String, AdapterError> {
+    let verifier = ExactCertificateVerifier::from_pem(pem)?;
+    let digest = Sha256::digest(verifier.certificate.as_ref());
+    Ok(digest
+        .iter()
+        .map(|byte| format!("{byte:02X}"))
+        .collect::<Vec<_>>()
+        .join(":"))
 }
 
 pub fn validate_local_endpoint(url: &Url) -> Result<(), AdapterError> {
@@ -452,6 +557,7 @@ mod certificate_tests {
         let verifier = ExactCertificateVerifier {
             certificate: CertificateDer::from(vec![1, 2, 3]),
             algorithms: aws_lc_rs::default_provider().signature_verification_algorithms,
+            mismatch_seen: Arc::new(AtomicBool::new(false)),
         };
         let name = ServerName::try_from("127.0.0.1").unwrap();
         assert!(

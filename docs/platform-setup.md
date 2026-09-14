@@ -11,7 +11,7 @@ $client = "$env:ProgramFiles\SunshineClient\sunshine-client.exe"
 msiexec.exe /i .\sunshine-client-0.1.1-windows-x64.msi /norestart
 ```
 
-普通 MSI 安装提交后会启动 Setup 并请求一次 Windows 管理员确认；只有提权成功后才读取或写入受保护状态。若取消 UAC、使用 `/qn` 或其他无终端方式，安装器仍保留部署和服务登记；随后在管理员终端显式运行 `& "$env:ProgramFiles\SunshineClient\sunshine-client.exe" setup --interactive`。配对失败不会回滚已提交的安装。
+MSI 只安装程序并登记 Manual/Stopped 服务，不启动配对，也不读取任何秘密。安装完成后，在管理员终端显式运行 `& "$env:ProgramFiles\SunshineClient\sunshine-client.exe" setup --interactive`；原有 CLI 会在需要写入受保护状态时请求提权，`--help` 和 `--version` 不触发 UAC。配对失败不会回滚已提交的安装。
 
 交互输入 Manager 管理台生成的配对码、`https://127.0.0.1:47990/`、Sunshine Web UI 用户名和密码。默认服务账户 LocalSystem，状态目录 `C:\ProgramData\SunshineClient`。MSI 会把 `C:\Program Files\SunshineClient` 事务性追加到机器 PATH；新终端可直接运行 `sunshine-client`，卸载会移除该安装器拥有的 PATH 项。
 
@@ -57,6 +57,11 @@ Client 始终验证 TLS，不提供 `--insecure`。配置 Sunshine 连接时必�
    `sunshine_certificate` PEM 字符串，两者不能同时存在。Client 保存公开证书并要求服务端呈现完全相同的
    证书，不依赖系统 CA，也不要求回环 IP SAN。路径必须是本机绝对路径、普通文件且不能是符号链接，私钥
    `pkey` 绝不能提供给 Client。
+
+Windows 交互配置会搜索 `%ProgramFiles%\Sunshine\config\credentials\cacert.pem`、
+`%ProgramW6432%\Sunshine\config\credentials\cacert.pem`，并查询 `SunshineService` 的实际可执行文件目录。
+候选文件必须小于等于 64 KiB、不是符号链接或重解析点、恰好包含一个证书且不含私钥；选择前会显示
+SHA-256 指纹。`doctor --sunshine` 的脱敏结果分别报告地址、信任模式、指纹、TCP/TLS/API/凭据和版本状态。
 
 浏览器点击“继续访问”只影响浏览器，不会改变后台服务的系统信任，也不会建立证书固定。若采用系统信任模式，
 核对签发 CA 的来源和 SHA256 指纹后，可将 **CA 公共证书** 导入系统信任库：

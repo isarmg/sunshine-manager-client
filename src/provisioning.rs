@@ -58,6 +58,16 @@ pub enum ProvisionError {
     RateLimited,
     #[error("Manager protocol or platform is unsupported")]
     Unsupported,
+    #[error("Sunshine certificate is not trusted")]
+    SunshineCertificateUntrusted,
+    #[error("Sunshine certificate pin does not match")]
+    SunshineCertificateMismatch,
+    #[error("Sunshine rejected its local credentials")]
+    SunshineCredentialsRejected,
+    #[error("Sunshine HTTPS API is unavailable")]
+    SunshineApiUnavailable,
+    #[error("Sunshine version is unsupported")]
+    SunshineVersionUnsupported,
     #[error("awaiting_pairing: run setup or pair explicitly")]
     Unpaired,
     #[error(transparent)]
@@ -289,8 +299,19 @@ pub async fn pair(state_path: &Path) -> Result<(), ProvisionError> {
         .read()
         .await
         .map_err(|error| match error {
-            crate::adapter::AdapterError::Unavailable => ProvisionError::Unavailable,
-            crate::adapter::AdapterError::UnsupportedVersion => ProvisionError::Unsupported,
+            crate::adapter::AdapterError::CertificateUntrusted => {
+                ProvisionError::SunshineCertificateUntrusted
+            }
+            crate::adapter::AdapterError::CertificateMismatch => {
+                ProvisionError::SunshineCertificateMismatch
+            }
+            crate::adapter::AdapterError::CredentialsRejected => {
+                ProvisionError::SunshineCredentialsRejected
+            }
+            crate::adapter::AdapterError::ApiUnavailable => ProvisionError::SunshineApiUnavailable,
+            crate::adapter::AdapterError::UnsupportedVersion => {
+                ProvisionError::SunshineVersionUnsupported
+            }
             crate::adapter::AdapterError::UnsafeConfiguration
             | crate::adapter::AdapterError::InvalidLocalEndpoint => ProvisionError::Configuration,
         })?
