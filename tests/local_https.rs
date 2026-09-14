@@ -453,7 +453,7 @@ fn credentials_are_not_formatted_in_adapter_errors() {
 }
 
 #[tokio::test]
-#[ignore = "requires loopback sockets and openssl"]
+#[ignore = "requires a Manager certificate trusted by the standard WebPKI roots"]
 async fn authenticated_wss_delivers_result_and_revocation_stops_reconnect() {
     use futures_util::{SinkExt, StreamExt};
     use sunshine_client::transport::{
@@ -469,7 +469,6 @@ async fn authenticated_wss_delivers_result_and_revocation_stops_reconnect() {
     };
     let temporary = tempfile::tempdir().unwrap();
     certificates(temporary.path());
-    let ca = std::fs::read(temporary.path().join("ca.pem")).unwrap();
     let sunshine_certificate = std::fs::read(temporary.path().join("sunshine.pem")).unwrap();
     let sunshine = serve(temporary.path(), vec![response(config("28"))]).await;
     let binding = Binding {
@@ -598,8 +597,7 @@ async fn authenticated_wss_delivers_result_and_revocation_stops_reconnect() {
             .await
             .unwrap();
     });
-    let connection =
-        ManagerConnection::new(&endpoint, Zeroizing::new("a".repeat(64)), &ca).unwrap();
+    let connection = ManagerConnection::new(&endpoint, Zeroizing::new("a".repeat(64))).unwrap();
     let (_health_tx, health) = tokio::sync::watch::channel(HealthObservation {
         sunshine_reachable: true,
         configuration: None,
@@ -630,8 +628,8 @@ async fn authenticated_wss_delivers_result_and_revocation_stops_reconnect() {
 
 #[test]
 fn wss_endpoint_policy_rejects_plaintext_and_credentials_in_urls() {
-    use sarmg_client_secure_http::Url;
     use sunshine_client::transport::validate_manager_endpoint;
+    use url::Url;
     for endpoint in [
         "ws://manager.example/sunshine-client/v1/connect",
         "https://manager.example/sunshine-client/v1/connect",

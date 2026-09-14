@@ -437,8 +437,8 @@ fn configuration_metadata_and_unsupported_versions_are_not_saved() {
 
 #[test]
 fn endpoint_policy_rejects_remote_hosts_plaintext_credentials_and_paths() {
-    use sarmg_client_secure_http::Url;
     use sunshine_client::adapter::validate_local_endpoint;
+    use url::Url;
     for url in [
         "http://127.0.0.1:47990",
         "https://example.com",

@@ -12,7 +12,6 @@ use async_trait::async_trait;
 use base64::{Engine as _, engine::general_purpose::STANDARD};
 use reqwest::{Method, Request, header, redirect::Policy};
 use rustls_platform_verifier::ConfigVerifierExt;
-use sarmg_client_secure_http::Url;
 use serde_json::Value;
 use sha2::{Digest, Sha256};
 use sunshine_client_protocol::{ConfigSnapshot, Effectiveness, config::FIELDS};
@@ -27,6 +26,7 @@ use tokio_rustls::rustls::{
     },
     pki_types::{CertificateDer, ServerName, UnixTime, pem::PemObject},
 };
+use url::Url;
 use zeroize::Zeroizing;
 
 pub const MAX_CONFIG_BYTES: usize = 512 * 1024;

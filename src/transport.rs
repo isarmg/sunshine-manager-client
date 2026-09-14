@@ -5,7 +5,6 @@ use crate::{
 };
 use futures_util::{SinkExt, StreamExt, stream::FuturesUnordered};
 use sarmg_client_runtime::RetryBackoff;
-use sarmg_client_secure_http::Url;
 use std::{future::Future, pin::Pin, sync::Arc, time::Duration};
 use sunshine_client_protocol::{
     Binding, Capabilities, ClientMessage, ConfigSnapshot, MAX_MESSAGE_BYTES, ManagerMessage,
@@ -16,12 +15,8 @@ use tokio::{
     sync::watch,
     time::{Instant, MissedTickBehavior, timeout},
 };
-use tokio_rustls::rustls::{
-    self,
-    pki_types::{CertificateDer, pem::PemObject},
-};
 use tokio_tungstenite::{
-    Connector, MaybeTlsStream, WebSocketStream, connect_async_tls_with_config,
+    MaybeTlsStream, WebSocketStream, connect_async_with_config,
     tungstenite::{
         self, Message,
         client::IntoClientRequest,
@@ -29,6 +24,7 @@ use tokio_tungstenite::{
         protocol::WebSocketConfig,
     },
 };
+use url::Url;
 use zeroize::Zeroizing;
 
 pub const CONNECT_PATH: &str = "/sunshine-client/v1/connect";
@@ -55,20 +51,15 @@ pub struct HealthObservation {
     pub observed_at: Option<Instant>,
 }
 
-/// Endpoint and root must come from protected local provisioning, never from an inbound task.
+/// The endpoint must come from protected local provisioning, never from an inbound task.
 /// Credentials have no Debug/Serialize implementation and are never put into the URL.
 pub struct ManagerConnection {
     endpoint: Url,
     credential: Zeroizing<String>,
-    tls: Connector,
 }
 
 impl ManagerConnection {
-    pub fn new(
-        endpoint: &str,
-        credential: Zeroizing<String>,
-        root_pem: &[u8],
-    ) -> Result<Self, TransportError> {
+    pub fn new(endpoint: &str, credential: Zeroizing<String>) -> Result<Self, TransportError> {
         let endpoint = Url::parse(endpoint).map_err(|_| TransportError::Configuration)?;
         validate_manager_endpoint(&endpoint)?;
         // Enrollment provisions one independent 256-bit random credential, encoded as lowercase hex.
@@ -79,37 +70,9 @@ impl ManagerConnection {
         {
             return Err(TransportError::Configuration);
         }
-        if root_pem.len() > 1024 * 1024 {
-            return Err(TransportError::Configuration);
-        }
-        if root_pem.is_empty() {
-            return Ok(Self {
-                endpoint,
-                credential,
-                tls: Connector::NativeTls(
-                    native_tls::TlsConnector::builder()
-                        .min_protocol_version(Some(native_tls::Protocol::Tlsv12))
-                        .build()
-                        .map_err(|_| TransportError::Configuration)?,
-                ),
-            });
-        }
-        let mut roots = rustls::RootCertStore::empty();
-        for certificate in CertificateDer::pem_slice_iter(root_pem) {
-            roots
-                .add(certificate.map_err(|_| TransportError::Configuration)?)
-                .map_err(|_| TransportError::Configuration)?;
-        }
-        if roots.is_empty() {
-            return Err(TransportError::Configuration);
-        }
-        let tls = rustls::ClientConfig::builder()
-            .with_root_certificates(roots)
-            .with_no_client_auth();
         Ok(Self {
             endpoint,
             credential,
-            tls: Connector::Rustls(Arc::new(tls)),
         })
     }
 
@@ -135,7 +98,7 @@ impl ManagerConnection {
         config.max_write_buffer_size = MAX_MESSAGE_BYTES * 2;
         let (socket, response) = timeout(
             IO_TIMEOUT,
-            connect_async_tls_with_config(request, Some(config), false, Some(self.tls.clone())),
+            connect_async_with_config(request, Some(config), false),
         )
         .await
         .map_err(|_| TransportError::Disconnected)?

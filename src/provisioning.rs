@@ -7,13 +7,13 @@ use crate::{
     transport::{HealthObservation, ManagerConnection, TransportError},
 };
 use rand::RngCore;
-use sarmg_client_secure_http::{NetworkPolicy, ResponseBudget, SecureHttpClient, TlsConfig, Url};
 use serde::{Deserialize, Serialize};
 use std::{path::Path, sync::Arc, time::Duration};
 use sunshine_client_protocol::{
     Binding, Capabilities, ClientOs, Effectiveness, PROTOCOL, SUNSHINE_VERSION, config::FIELDS,
 };
 use tokio::sync::watch;
+use url::Url;
 use uuid::Uuid;
 use zeroize::Zeroizing;
 
@@ -98,7 +98,7 @@ impl Bootstrap {
         if self.enrollment_token.len() != 64 {
             return Err(ProvisionError::Configuration);
         }
-        ManagerConnection::new(&self.manager_endpoint, Zeroizing::new("a".repeat(64)), &[])?;
+        ManagerConnection::new(&self.manager_endpoint, Zeroizing::new("a".repeat(64)))?;
         self.adapter()?;
         Ok(())
     }
@@ -123,17 +123,64 @@ impl Identity {
     }
 }
 
-fn system_client() -> Result<SecureHttpClient, ProvisionError> {
-    SecureHttpClient::new(
-        Duration::from_secs(15),
-        ResponseBudget {
-            max_header_bytes: 16384,
-            max_body_bytes: 16384,
-        },
-        TlsConfig::default(),
-        format!("sunshine-client/{}", env!("CARGO_PKG_VERSION")),
-    )
-    .map_err(config_error)
+fn system_client() -> Result<reqwest::Client, ProvisionError> {
+    reqwest::Client::builder()
+        .timeout(Duration::from_secs(15))
+        .connect_timeout(Duration::from_secs(10))
+        .redirect(reqwest::redirect::Policy::none())
+        .user_agent(format!("sunshine-client/{}", env!("CARGO_PKG_VERSION")))
+        .build()
+        .map_err(config_error)
+}
+
+const MAX_MANAGER_RESPONSE_BYTES: usize = 16 * 1024;
+
+struct BoundedResponse {
+    status: reqwest::StatusCode,
+    body: Vec<u8>,
+}
+
+async fn execute_bounded(
+    client: &reqwest::Client,
+    request: reqwest::Request,
+) -> Result<BoundedResponse, ProvisionError> {
+    let response = client
+        .execute(request)
+        .await
+        .map_err(|_| ProvisionError::Unavailable)?;
+    let header_bytes = response
+        .headers()
+        .iter()
+        .try_fold(0usize, |total, (name, value)| {
+            total
+                .checked_add(name.as_str().len())?
+                .checked_add(value.as_bytes().len())
+        });
+    if header_bytes.is_none_or(|size| size > MAX_MANAGER_RESPONSE_BYTES)
+        || response
+            .content_length()
+            .is_some_and(|length| length > MAX_MANAGER_RESPONSE_BYTES as u64)
+    {
+        return Err(ProvisionError::Configuration);
+    }
+    let status = response.status();
+    let mut response = response;
+    let mut body = Vec::new();
+    while let Some(chunk) = response
+        .chunk()
+        .await
+        .map_err(|_| ProvisionError::Unavailable)?
+    {
+        if body
+            .len()
+            .checked_add(chunk.len())
+            .is_none_or(|length| length > MAX_MANAGER_RESPONSE_BYTES)
+        {
+            return Err(ProvisionError::Configuration);
+        }
+        body.extend_from_slice(&chunk);
+    }
+    Ok(BoundedResponse { status, body })
 }
 #[derive(Deserialize)]
 #[serde(deny_unknown_fields)]
@@ -157,16 +204,8 @@ async fn resolve_pairing(config: &Bootstrap) -> Result<PairingTarget, ProvisionE
         .map_err(config_error)?
         .into(),
     );
-    let response = system_client()?
-        .execute(
-            NetworkPolicy::PrivateDevice {
-                allow_loopback: true,
-                allow_link_local: false,
-            },
-            request,
-        )
-        .await
-        .map_err(|_| ProvisionError::Unavailable)?;
+    let client = system_client()?;
+    let response = execute_bounded(&client, request).await?;
     if !response.status.is_success() {
         return Err(classify_status(response.status.as_u16()));
     }
@@ -226,10 +265,6 @@ async fn provision(
     endpoint.set_scheme("https").map_err(config_error)?;
     endpoint.set_path("/sunshine-client/v1/identity");
     let client = system_client()?;
-    let policy = NetworkPolicy::PrivateDevice {
-        allow_loopback: true,
-        allow_link_local: false,
-    };
     let mut request = reqwest::Request::new(reqwest::Method::GET, endpoint.clone());
     let raw = Zeroizing::new(format!("Bearer {}", identity.credential.as_str()));
     let mut header = reqwest::header::HeaderValue::from_str(&raw).map_err(config_error)?;
@@ -237,10 +272,7 @@ async fn provision(
     request
         .headers_mut()
         .insert(reqwest::header::AUTHORIZATION, header);
-    let response = client
-        .execute(policy, request)
-        .await
-        .map_err(|_| ProvisionError::Unavailable)?;
+    let response = execute_bounded(&client, request).await?;
     let binding: Binding = if response.status.is_success() {
         serde_json::from_slice(&response.body).map_err(config_error)?
     } else if response.status == reqwest::StatusCode::UNAUTHORIZED {
@@ -252,10 +284,7 @@ async fn provision(
         );
         // The body is sent only to the locally pinned TLS endpoint and never logged.
         *request.body_mut()=Some(serde_json::to_vec(&serde_json::json!({"device_id":identity.binding.device_id,"installation_id":identity.binding.installation_id,"token":identity.config.enrollment_token.as_str(),"credential":identity.credential.as_str()})).map_err(config_error)?.into());
-        let response = client
-            .execute(policy, request)
-            .await
-            .map_err(|_| ProvisionError::Unavailable)?;
+        let response = execute_bounded(&client, request).await?;
         if matches!(response.status.as_u16(), 401 | 403) {
             return Err(classify_status(response.status.as_u16()));
         }
@@ -350,7 +379,7 @@ pub async fn run(state_path: &Path, shutdown: watch::Receiver<bool>) -> Result<(
         journal,
     ));
     let connection =
-        ManagerConnection::new(&identity.config.manager_endpoint, identity.credential, &[])?;
+        ManagerConnection::new(&identity.config.manager_endpoint, identity.credential)?;
     let capabilities = Capabilities {
         protocol: PROTOCOL.into(),
         client_version: env!("CARGO_PKG_VERSION").into(),
@@ -480,13 +509,13 @@ mod error_tests {
     }
 }
 
-pub(crate) fn network_probe(config: &Bootstrap) -> Result<serde_json::Value, ProvisionError> {
+pub(crate) async fn network_probe(config: &Bootstrap) -> Result<serde_json::Value, ProvisionError> {
     let mut url = Url::parse(&config.manager_endpoint).map_err(config_error)?;
     url.set_scheme("https").map_err(config_error)?;
     url.set_path("/health/live");
-    let response = system_client()?
-        .get_client_blocking(url.as_str(), Default::default())
-        .map_err(|_| ProvisionError::Unavailable)?;
+    let client = system_client()?;
+    let request = client.get(url).build().map_err(config_error)?;
+    let response = execute_bounded(&client, request).await?;
     if !response.status.is_success() {
         return Err(classify_status(response.status.as_u16()));
     }

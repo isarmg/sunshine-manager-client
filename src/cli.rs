@@ -112,7 +112,7 @@ struct PairInput {
 }
 impl PairInput {
     fn bootstrap(self) -> Result<Bootstrap> {
-        let mut url = sarmg_client_secure_http::Url::parse(&self.server).map_err(input_error)?;
+        let mut url = url::Url::parse(&self.server).map_err(input_error)?;
         if url.scheme() != "https"
             || !url.username().is_empty()
             || url.password().is_some()
@@ -723,7 +723,7 @@ fn setup(args: &Args, path: PathBuf) -> Result<Value> {
             );
         }
         if let Some(server) = args.get("--server") {
-            let mut expected = sarmg_client_secure_http::Url::parse(server)
+            let mut expected = url::Url::parse(server)
                 .map_err(|_| fail(2, "invalid_server_origin").at_step("configuration"))?;
             if expected.scheme() != "https"
                 || expected.path() != "/"
@@ -1092,7 +1092,10 @@ fn execute(args: &Args) -> Result<Value> {
                 }
                 let store = read_store(&path)?.ok_or_else(|| fail(4, "awaiting_configuration"))?;
                 let (config, _) = current(&store)?;
-                value["network"] = provisioning::network_probe(&config).map_err(provision_error)?;
+                let runtime = tokio::runtime::Runtime::new().map_err(storage_error)?;
+                value["network"] = runtime
+                    .block_on(provisioning::network_probe(&config))
+                    .map_err(provision_error)?;
             }
             if args.has("--sunshine") {
                 if words != ["doctor"] {
