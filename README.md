@@ -2,7 +2,7 @@
 
 Sunshine 的独立本机管理代理，公开入口为 `sunshine-client`。不处理视频流，不安装或停止 Sunshine 本体，不索取屏幕录制/输入控制权限。后台使用系统服务，删除了 C# 托盘与第二套配对向导。
 
-当前纯 CLI 与系统服务版本为 `0.1.1`；用法和验收限制见 [CLI 改造说明](docs/releases/cli-unreleased.md)。安装产物未签名、未公证，实机与升级验收边界见发行说明。
+当前纯 CLI 与系统服务版本为 `0.1.2`；用法和验收限制见 [CLI 改造说明](docs/releases/cli-unreleased.md)。安装产物未签名、未公证，实机与升级验收边界见发行说明。
 
 公共 CLI 输出、受保护输入、系统服务生命周期和本地只读状态通道来自 Client Foundation 0.9.1；本仓只
 保留 Sunshine 配对、证书信任、本机配置访问、任务执行及结果确认。Manager 和本机 Sunshine 是两条独立
