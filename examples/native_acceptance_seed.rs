@@ -22,8 +22,8 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
         "binding": {"manager_id": uuid::Uuid::new_v4(), "device_id": uuid::Uuid::new_v4(), "installation_id": uuid::Uuid::new_v4()},
         "credential": "a".repeat(64), "enrolled": true,
         "sunshine_version": sunshine_client_protocol::SUNSHINE_VERSION,
-        "config": {"manager_endpoint": "wss://127.0.0.1:9/sunshine-client/v1/connect", "enrollment_token": "",
-            "sunshine_endpoint": "https://127.0.0.1:9/", "sunshine_username": "native-fixture", "sunshine_password": "offline-fixture-secret", "restart_allowed": false}
+        "config": {"manager_endpoint": "wss://127.0.0.1:9/sunshine-client/v2/connect", "enrollment_token": "",
+            "sunshine_endpoint": "https://127.0.0.1:9/", "sunshine_username": "native-fixture", "sunshine_password": "offline-fixture-secret"}
     }))?)?;
     drop(store);
     let mut journal = FileJournal::open(&path.join("journal"))?;

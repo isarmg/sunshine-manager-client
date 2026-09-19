@@ -151,7 +151,7 @@ fn restart() -> Task {
 #[tokio::test]
 async fn partial_patch_preserves_all_untouched_fields_and_never_restarts() {
     let sunshine = FakeSunshine::default();
-    let executor = Executor::new(binding(), true, sunshine.clone(), MemoryJournal::default());
+    let executor = Executor::new(binding(), sunshine.clone(), MemoryJournal::default());
     let report = executor.deliver(&patch(), DeliveryMode::Execute).await;
     let Report::ConfigSaved { snapshot } = report else {
         panic!("{report:?}")
@@ -172,7 +172,7 @@ async fn partial_patch_preserves_all_untouched_fields_and_never_restarts() {
 #[tokio::test]
 async fn duplicate_delivery_returns_result_without_repeating_side_effects() {
     let sunshine = FakeSunshine::default();
-    let executor = Executor::new(binding(), true, sunshine.clone(), MemoryJournal::default());
+    let executor = Executor::new(binding(), sunshine.clone(), MemoryJournal::default());
     let task = patch();
     let first = executor.deliver(&task, DeliveryMode::Execute).await;
     assert_eq!(first, executor.deliver(&task, DeliveryMode::Execute).await);
@@ -186,7 +186,7 @@ async fn duplicate_delivery_returns_result_without_repeating_side_effects() {
 #[tokio::test]
 async fn removal_only_deletes_the_requested_managed_field() {
     let sunshine = FakeSunshine::default();
-    let executor = Executor::new(binding(), true, sunshine.clone(), MemoryJournal::default());
+    let executor = Executor::new(binding(), sunshine.clone(), MemoryJournal::default());
     let mut task = patch();
     let Command::PatchConfig { set, remove, .. } = &mut task.command else {
         unreachable!()
@@ -223,7 +223,7 @@ async fn an_uncertain_save_is_not_retried_even_when_old_configuration_is_still_p
             report: None,
         },
     );
-    let executor = Executor::new(binding(), true, sunshine.clone(), journal);
+    let executor = Executor::new(binding(), sunshine.clone(), journal);
     for mode in [DeliveryMode::Execute, DeliveryMode::InspectOnly] {
         assert_eq!(
             executor.deliver(&task, mode).await,
@@ -237,12 +237,7 @@ async fn an_uncertain_save_is_not_retried_even_when_old_configuration_is_still_p
 
 #[tokio::test]
 async fn reused_operation_id_with_changed_content_is_rejected() {
-    let executor = Executor::new(
-        binding(),
-        true,
-        FakeSunshine::default(),
-        MemoryJournal::default(),
-    );
+    let executor = Executor::new(binding(), FakeSunshine::default(), MemoryJournal::default());
     let task = patch();
     executor.deliver(&task, DeliveryMode::Execute).await;
     let mut changed = task;
@@ -259,7 +254,7 @@ async fn reused_operation_id_with_changed_content_is_rejected() {
 #[tokio::test]
 async fn simultaneous_modifications_with_same_revision_have_one_winner() {
     let sunshine = FakeSunshine::default();
-    let executor = Executor::new(binding(), true, sunshine.clone(), MemoryJournal::default());
+    let executor = Executor::new(binding(), sunshine.clone(), MemoryJournal::default());
     let a = patch();
     let b = patch();
     let (a, b) = tokio::join!(
@@ -275,7 +270,7 @@ async fn simultaneous_modifications_with_same_revision_have_one_winner() {
 async fn conflict_on_pre_effect_read_never_writes() {
     let sunshine = FakeSunshine::default();
     sunshine.0.lock().unwrap().conflict_on_second_read = true;
-    let executor = Executor::new(binding(), true, sunshine.clone(), MemoryJournal::default());
+    let executor = Executor::new(binding(), sunshine.clone(), MemoryJournal::default());
     assert!(matches!(
         executor.deliver(&patch(), DeliveryMode::Execute).await,
         Report::Conflict { .. }
@@ -287,7 +282,7 @@ async fn conflict_on_pre_effect_read_never_writes() {
 async fn lost_save_receipt_is_verified_by_full_readback() {
     let sunshine = FakeSunshine::default();
     sunshine.0.lock().unwrap().lose_write_receipt = true;
-    let executor = Executor::new(binding(), true, sunshine.clone(), MemoryJournal::default());
+    let executor = Executor::new(binding(), sunshine.clone(), MemoryJournal::default());
     assert!(matches!(
         executor.deliver(&patch(), DeliveryMode::Execute).await,
         Report::ConfigSaved { .. }
@@ -301,7 +296,7 @@ async fn crash_after_save_before_result_persistence_reconciles_without_reexecuti
     let journal = MemoryJournal::default();
     journal.0.lock().unwrap().fail_write = Some(3);
     let task = patch();
-    let executor = Executor::new(binding(), true, sunshine.clone(), journal.clone());
+    let executor = Executor::new(binding(), sunshine.clone(), journal.clone());
     assert_eq!(
         executor.deliver(&task, DeliveryMode::Execute).await,
         Report::Unknown {
@@ -309,7 +304,7 @@ async fn crash_after_save_before_result_persistence_reconciles_without_reexecuti
         }
     );
     drop(executor);
-    let recovered = Executor::new(binding(), true, sunshine.clone(), journal);
+    let recovered = Executor::new(binding(), sunshine.clone(), journal);
     assert!(matches!(
         recovered.deliver(&task, DeliveryMode::InspectOnly).await,
         Report::ConfigSaved { .. }
@@ -323,7 +318,7 @@ async fn persistence_failure_before_effect_fails_closed() {
         let sunshine = FakeSunshine::default();
         let journal = MemoryJournal::default();
         journal.0.lock().unwrap().fail_write = Some(fail_write);
-        let executor = Executor::new(binding(), true, sunshine.clone(), journal);
+        let executor = Executor::new(binding(), sunshine.clone(), journal);
         assert!(matches!(
             executor.deliver(&patch(), DeliveryMode::Execute).await,
             Report::Unknown { .. }
@@ -338,7 +333,7 @@ async fn lost_restart_receipt_never_triggers_another_restart() {
     sunshine.0.lock().unwrap().lose_restart_receipt = true;
     let journal = MemoryJournal::default();
     let task = restart();
-    let executor = Executor::new(binding(), true, sunshine.clone(), journal.clone());
+    let executor = Executor::new(binding(), sunshine.clone(), journal.clone());
     assert_eq!(
         executor.deliver(&task, DeliveryMode::Execute).await,
         Report::Unknown {
@@ -346,7 +341,7 @@ async fn lost_restart_receipt_never_triggers_another_restart() {
         }
     );
     drop(executor);
-    let recovered = Executor::new(binding(), true, sunshine.clone(), journal);
+    let recovered = Executor::new(binding(), sunshine.clone(), journal);
     assert_eq!(
         recovered.deliver(&task, DeliveryMode::Execute).await,
         Report::Unknown {
@@ -358,12 +353,7 @@ async fn lost_restart_receipt_never_triggers_another_restart() {
 
 #[tokio::test]
 async fn restart_receipt_and_reachability_are_not_runtime_effectiveness() {
-    let executor = Executor::new(
-        binding(),
-        true,
-        FakeSunshine::default(),
-        MemoryJournal::default(),
-    );
+    let executor = Executor::new(binding(), FakeSunshine::default(), MemoryJournal::default());
     let Report::RestartAcknowledged { snapshot } =
         executor.deliver(&restart(), DeliveryMode::Execute).await
     else {
@@ -375,7 +365,7 @@ async fn restart_receipt_and_reachability_are_not_runtime_effectiveness() {
 #[tokio::test]
 async fn inspect_unknown_operation_is_read_only_and_does_not_guess() {
     let sunshine = FakeSunshine::default();
-    let executor = Executor::new(binding(), true, sunshine.clone(), MemoryJournal::default());
+    let executor = Executor::new(binding(), sunshine.clone(), MemoryJournal::default());
     assert_eq!(
         executor
             .deliver(&restart(), DeliveryMode::InspectOnly)
@@ -392,7 +382,7 @@ async fn journal_capacity_exhaustion_rejects_instead_of_evicting_deduplication()
     let sunshine = FakeSunshine::default();
     let journal = MemoryJournal::default();
     journal.0.lock().unwrap().full = true;
-    let executor = Executor::new(binding(), true, sunshine.clone(), journal);
+    let executor = Executor::new(binding(), sunshine.clone(), journal);
     assert_eq!(
         executor.deliver(&patch(), DeliveryMode::Execute).await,
         Report::Rejected {
@@ -422,16 +412,12 @@ fn configuration_metadata_and_unsupported_versions_are_not_saved() {
             .fields
             .is_empty()
     );
-    let legacy = Configuration::from_response(
-        json!({"status": true, "platform": "linux", "version": "2026.516.143833"}),
-    )
-    .unwrap();
-    assert_eq!(legacy.sunshine_version(), "2026.516.143833");
     assert_eq!(
-        legacy
-            .snapshot(Effectiveness::PendingVerification)
-            .sunshine_version,
-        "2026.516.143833"
+        Configuration::from_response(
+            json!({"status": true, "platform": "linux", "version": "2026.516.143833"}),
+        )
+        .err(),
+        Some(AdapterError::UnsupportedVersion)
     );
 }
 

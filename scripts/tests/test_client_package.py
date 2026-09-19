@@ -42,7 +42,7 @@ class PackageTests(unittest.TestCase):
         names = ["sunshine-client.exe" if windows else "sunshine-client", "README.md", "platform-setup.md", "LICENSE", "bootstrap.example.json"]
         files = {n: b"fixture" for n in names}
         hashes = {n: hashlib.sha256(b).hexdigest() for n, b in files.items()}
-        manifest = {"product": "sunshine-client", "version": VERSION, "source_commit": "b" * 40 if wrong_sha else SHA, "target": target, "protocol": "sunshine-management/1", "authenticode_signed": False, "files": hashes}
+        manifest = {"product": "sunshine-client", "version": VERSION, "source_commit": "b" * 40 if wrong_sha else SHA, "target": target, "protocol": "sunshine-management/2", "authenticode_signed": False, "files": hashes}
         files["manifest.json"] = json.dumps(manifest).encode()
         files["SHA256SUMS"] = "".join(f"{hashlib.sha256(b).hexdigest()}  {n}\n" for n, b in sorted(files.items())).encode()
         entries = [(name + "/" + n, b) for n, b in files.items()]
@@ -67,7 +67,7 @@ class PackageTests(unittest.TestCase):
             with self.subTest(windows=windows), tempfile.TemporaryDirectory() as tmp:
                 root = Path(tmp)
                 archive = self.fixture(root, windows=windows)
-                with patch.object(checker, "run", return_value=f"sunshine-client {VERSION} (git {SHA}; sunshine-management/1)"):
+                with patch.object(checker, "run", return_value=f"sunshine-client {VERSION} (git {SHA}; sunshine-management/2)"):
                     checker.verify(archive, root, SHA)
 
     def test_macos_archives_keep_their_actual_architecture(self):
@@ -75,7 +75,7 @@ class PackageTests(unittest.TestCase):
             with self.subTest(target=target), tempfile.TemporaryDirectory() as tmp:
                 root = Path(tmp)
                 archive = self.fixture(root, mac_target=target)
-                with patch.object(checker, "run", return_value=f"sunshine-client {VERSION} (git {SHA}; sunshine-management/1)"):
+                with patch.object(checker, "run", return_value=f"sunshine-client {VERSION} (git {SHA}; sunshine-management/2)"):
                     checker.verify(archive, root, SHA)
 
     def test_intel_macos_archive_is_not_a_supported_release(self):

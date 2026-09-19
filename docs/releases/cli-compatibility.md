@@ -1,23 +1,20 @@
-# CLI 预发布兼容矩阵
+# Sunshine Client 0.2.0 兼容边界
 
-当前正式版本为 `0.1.4`，支持 Windows x64、Linux x64 和 macOS Apple Silicon；Intel macOS 不再适配或发行。部署时同时核对版本与源码身份。
+当前正式版本为 `0.2.0`，支持 Windows x64、Linux x64 和 macOS Apple Silicon。部署时同时核对版本、源码
+身份、Manager 版本和 Sunshine 固定版本。
 
-| 维度 | 契约 |
-| --- | --- |
-| CLI JSON | `schema_version = 1` |
+| 维度 | 当前契约 |
+|---|---|
+| Manager 协议 | 仅 `sunshine-management/2`；不协商 v1 |
+| Sunshine | 仅 `v2026.914.233613` |
 | Client Foundation | `0.9.1`，固定提交 `2fa783a1eb7aefde8e54e328f91d67aa9e1eb890` |
-| 配置格式 | `sunshine-bootstrap-v1`，旧 bootstrap 严格字段保持 |
-| 身份与日志格式 | `sunshine-identity-journal-v1`；Unix 私有文件、Windows SQLite 后端保持 |
+| Bootstrap | 当前严格字段；旧 `restart_allowed`、应用权限和服务模式字段会被拒绝 |
+| 能力 | 配对后直接启用 Sunshine 专用能力；服务控制按平台固定适配器声明 |
 | IPC | Foundation `GetStatus/1`，进程世代、安装身份和配置修订校验 |
-| 协议依赖 | Server 提交 `d4b98b06a00d185bd845a4bd3e3df8c939807864`，增加真实 macOS 平台值 |
 
-| 来源 → 目标 | 数据兼容性 | 安装与回退边界 |
-| --- | --- | --- |
-| Windows/Linux 基线 `81b3a51e5668ea6734e7bad53a1db5ab39cf3012` → CLI 验证提交 | 同平台身份、凭据、执行记录后端保持；凭据更新不重注册、不清日志 | 现有安装器的覆盖拒绝仍有效，不能将直接替换二进制当作已支持的包升级 |
-| 全新 macOS → CLI 验证提交 | 新平台，使用 Unix 后端；上报真实 Apple Silicon 架构 | 必须先部署能识别新平台的 Server。通过 Apple Silicon 原生 CI 后发行 |
-| CLI 验证提交 → 原基线 | 未引入数据格式转换，但旧版本带有托盘启动行为 | 不支持自动降级。停服务并保留全部状态；不得恢复陈旧日志而重放副作用 |
-| Windows SQLite ↔ Unix 文件、其他历史格式 | 不支持跨平台复制或猜测转换 | 需要 `sarmg-upgrade` 的独立、精确适配器；目前没有此迁移边 |
+0.2.0 不读取旧 Bootstrap、旧协议身份或旧任务作为兼容输入，也不自动降级。部署 0.2.0 前停止旧服务、
+保全旧状态用于审计，在 Manager 0.11.0 创建/轮换授权码，并用当前受保护输入重新运行 `setup`。不要删除旧日志
+后假定副作用没有发生。
 
-当前 UI 删除不需要重写身份或执行日志，因此没有在 Client 中加入自动迁移。`sarmg-upgrade` 的 Server 数据恢复命令不能代替 Client 迁移。手工修改版本、删除执行记录或重新配对均不是升级方案。
-
-`init --bootstrap` 保留为复用同一导入实现的兼容入口。Windows 删除托盘后默认手动启动；管理员明确选择 `service start` 或 `service enable --now`。配对不改变开机策略，停止 Client 不停止 Sunshine 本体。卸载保留身份与日志；当前手动脚本遇到保留的旧目录或账户会拒绝覆盖，不能把卸载后重新运行该脚本描述成已支持的恢复流程。
+Windows SQLite 与 Unix 文件状态不能跨平台复制。产品仓不提供猜测式转换；只有 `sarmg-upgrade` 明确列入
+版本矩阵的转换才受支持。卸载、重新安装或手工修改版本号均不构成状态迁移。

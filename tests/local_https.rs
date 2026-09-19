@@ -222,6 +222,13 @@ fn response(value: serde_json::Value) -> String {
     )
 }
 
+fn text_response(body: &str) -> String {
+    format!(
+        "HTTP/1.1 200 OK\r\nContent-Type: text/plain\r\nContent-Length: {}\r\nConnection: close\r\n\r\n{body}",
+        body.len()
+    )
+}
+
 fn config(qp: &str) -> serde_json::Value {
     serde_json::json!({
         "status": true, "platform": "linux", "version": SUNSHINE_VERSION, "qp": qp,
@@ -335,6 +342,87 @@ async fn malformed_success_and_oversized_body_fail_closed() {
 
 #[tokio::test]
 #[ignore = "requires loopback sockets and openssl"]
+async fn protocol_v2_uses_fixed_sunshine_resources_and_reconciles_application_reordering() {
+    let temporary = tempfile::tempdir().unwrap();
+    certificates(temporary.path());
+    let certificate = std::fs::read(temporary.path().join("sunshine.pem")).unwrap();
+    let original = serde_json::json!({"name":"Steam","output":"","cmd":"","working-dir":"","exclude-global-prep-cmd":false,"elevated":false,"auto-detach":false,"wait-all":false,"exit-timeout":5,"prep-cmd":[],"detached":[],"image-path":""});
+    let updated = serde_json::json!({"name":"Steam Remote","output":"","cmd":"","working-dir":"","exclude-global-prep-cmd":false,"elevated":false,"auto-detach":false,"wait-all":false,"exit-timeout":5,"prep-cmd":[],"detached":[],"image-path":""});
+    let client_uuid = "123e4567-e89b-12d3-a456-426614174000";
+    let fixture = serve(
+        temporary.path(),
+        vec![
+            response(serde_json::json!({"apps":[original.clone()],"env":{}})),
+            response(serde_json::json!({"apps":[original],"env":{}})),
+            response(serde_json::json!({"status":true})),
+            response(serde_json::json!({"apps":[updated],"env":{}})),
+            response(serde_json::json!({"status":true,"named_certs":[{"uuid":client_uuid,"name":"TV","enabled":true}]})),
+            text_response("ready\npassword=secret\n"),
+            response(serde_json::json!({"virtualhid":{"installed":false,"version":"","minimum_version":"1.0"},"vigembus":{"installed":true,"version":"1.2","minimum_version":"1.0"}})),
+            response(serde_json::json!({"status":true})),
+            response(serde_json::json!({"status":true})),
+        ],
+    )
+    .await;
+    let mut sunshine = adapter(&fixture, &certificate);
+    let applications = sunshine.applications().await.unwrap();
+    let target = applications.applications[0].reference.clone();
+    let replacement = ApplicationSpec {
+        name: "Steam Remote".into(),
+        output: String::new(),
+        cmd: String::new(),
+        working_dir: String::new(),
+        exclude_global_prep_cmd: false,
+        elevated: false,
+        auto_detach: false,
+        wait_all: false,
+        exit_timeout: 5,
+        prep_cmd: vec![],
+        detached: vec![],
+        image_path: String::new(),
+    };
+    let saved = sunshine
+        .save_application(&applications.revision, Some(&target), &replacement)
+        .await
+        .unwrap();
+    assert_eq!(saved.applications[0].specification.name, "Steam Remote");
+    assert_eq!(
+        sunshine.paired_clients().await.unwrap().clients[0].uuid,
+        client_uuid
+    );
+    let logs = sunshine.logs(None, 4096).await.unwrap();
+    assert!(logs.text.contains("ready"));
+    assert!(!logs.text.contains("secret"));
+    assert!(logs.redacted);
+    let drivers = sunshine.virtual_input_status().await.unwrap();
+    assert!(drivers.vigembus.installed);
+    sunshine
+        .maintenance(MaintenanceAction::ResetDisplayPersistence)
+        .await
+        .unwrap();
+    sunshine
+        .submit_pairing_pin("0123456789abcdef0123456789abcdef", "1234", "TV")
+        .await
+        .unwrap();
+    let requests = fixture.requests.lock().unwrap();
+    let requests = requests
+        .iter()
+        .map(|value| String::from_utf8_lossy(value).to_string())
+        .collect::<Vec<_>>();
+    assert!(requests[2].starts_with("POST /api/apps "));
+    assert!(requests[2].contains("\"index\":0"));
+    assert!(requests[5].starts_with("GET /api/logs "));
+    assert!(requests[7].starts_with("POST /api/reset-display-device-persistence "));
+    assert!(requests[8].starts_with("POST /api/pin "));
+    assert!(
+        requests
+            .iter()
+            .all(|request| !request.to_ascii_lowercase().contains("origin:"))
+    );
+}
+
+#[tokio::test]
+#[ignore = "requires loopback sockets and openssl"]
 async fn sunshine_http_credentials_api_and_version_failures_are_distinct() {
     let temporary = tempfile::tempdir().unwrap();
     certificates(temporary.path());
@@ -405,7 +493,6 @@ async fn real_https_patch_preserves_original_configuration_and_filters_metadata(
     };
     let executor = Executor::new(
         binding.clone(),
-        false,
         adapter(&fixture, &sunshine_certificate),
         JournalFixture::default(),
     );
@@ -478,7 +565,6 @@ async fn authenticated_wss_delivers_result_and_revocation_stops_reconnect() {
     };
     let executor = Arc::new(Executor::new(
         binding.clone(),
-        false,
         adapter(&sunshine, &sunshine_certificate),
         JournalFixture::default(),
     ));
@@ -537,7 +623,7 @@ async fn authenticated_wss_delivers_result_and_revocation_stops_reconnect() {
             .send(Message::Text(
                 serde_json::to_string(&ManagerMessage::Task {
                     mode: DeliveryMode::Execute,
-                    task: task.clone(),
+                    task: Box::new(task.clone()),
                 })
                 .unwrap()
                 .into(),
@@ -549,7 +635,7 @@ async fn authenticated_wss_delivers_result_and_revocation_stops_reconnect() {
             .send(Message::Text(
                 serde_json::to_string(&ManagerMessage::Task {
                     mode: DeliveryMode::Execute,
-                    task: task.clone(),
+                    task: Box::new(task.clone()),
                 })
                 .unwrap()
                 .into(),
@@ -610,10 +696,16 @@ async fn authenticated_wss_delivers_result_and_revocation_stops_reconnect() {
         os: ClientOs::LinuxX86_64,
         sunshine_version: SUNSHINE_VERSION.into(),
         restart_allowed: false,
-        managed_fields: sunshine_client_protocol::config::FIELDS
+        managed_fields: sunshine_client_protocol::config::FIELD_DEFINITIONS
             .iter()
-            .map(|field| (*field).into())
+            .map(|field| field.key.into())
             .collect(),
+        application_management: true,
+        application_host_commands_allowed: false,
+        moonlight_pairing_management: true,
+        diagnostics: true,
+        maintenance: true,
+        service_control: false,
     };
     let result = tokio::time::timeout(
         std::time::Duration::from_secs(10),
@@ -631,17 +723,17 @@ fn wss_endpoint_policy_rejects_plaintext_and_credentials_in_urls() {
     use sunshine_client::transport::validate_manager_endpoint;
     use url::Url;
     for endpoint in [
-        "ws://manager.example/sunshine-client/v1/connect",
-        "https://manager.example/sunshine-client/v1/connect",
-        "wss://token@manager.example/sunshine-client/v1/connect",
-        "wss://manager.example/sunshine-client/v1/connect?token=secret",
+        "ws://manager.example/sunshine-client/v2/connect",
+        "https://manager.example/sunshine-client/v2/connect",
+        "wss://token@manager.example/sunshine-client/v2/connect",
+        "wss://manager.example/sunshine-client/v2/connect?token=secret",
         "wss://manager.example/other",
     ] {
         assert!(validate_manager_endpoint(&Url::parse(endpoint).unwrap()).is_err());
     }
     assert!(
         validate_manager_endpoint(
-            &Url::parse("wss://manager.example/sunshine-client/v1/connect").unwrap()
+            &Url::parse("wss://manager.example/sunshine-client/v2/connect").unwrap()
         )
         .is_ok()
     );

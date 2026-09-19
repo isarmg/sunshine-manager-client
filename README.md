@@ -1,8 +1,8 @@
 # Sunshine Client
 
-Sunshine 的独立本机管理代理，公开入口为 `sunshine-client`。不处理视频流，不安装或停止 Sunshine 本体，不索取屏幕录制/输入控制权限。后台使用系统服务，删除了 C# 托盘与第二套配对向导。
+Sunshine 的独立本机管理代理，公开入口为 `sunshine-client`。不处理视频流、不安装 Sunshine，也不索取屏幕录制或输入控制权限；Windows/Linux 可通过固定服务适配器控制已安装的 Sunshine 服务。
 
-当前纯 CLI 与系统服务版本为 `0.1.4`；用法和验收限制见 [CLI 改造说明](docs/releases/cli-unreleased.md)。安装产物未签名、未公证，实机与升级验收边界见发行说明。
+当前纯 CLI 与系统服务版本为 `0.2.0`，只接受 `sunshine-management/2` 与 Sunshine `v2026.914.233613`。安装产物未签名、未公证，实机与升级验收边界见发行说明。
 
 公共 CLI 输出、受保护输入、系统服务生命周期和本地只读状态通道来自 Client Foundation 0.9.1；本仓只
 保留 Sunshine 配对、证书信任、本机配置访问、任务执行及结果确认。Manager 和本机 Sunshine 是两条独立
@@ -31,8 +31,7 @@ Unix 写操作使用 `sudo`，Windows 使用管理员终端。有交互终端的
   "sunshine_endpoint": "https://127.0.0.1:47990/",
   "sunshine_certificate_path": "/Sunshine应用数据目录/credentials/cacert.pem",
   "sunshine_username": "<由受保护输入提供>",
-  "sunshine_password": "<由受保护输入提供>",
-  "restart_allowed": false
+  "sunshine_password": "<由受保护输入提供>"
 }
 ```
 
@@ -42,7 +41,7 @@ Server 更换实例授权码后会撤销当前凭据。停止服务，再通过�
 
 ## 修改本机设置和密码
 
-配置候选文件仅允许 `sunshine_endpoint`、`restart_allowed`。`config validate/diff/apply --file /absolute/candidate.json` 使用同一规则，提交还需 `--expected-revision`。
+配置候选文件仅允许 `sunshine_endpoint`。`config validate/diff/apply --file /absolute/candidate.json` 使用同一规则，提交还需 `--expected-revision`。Client 配对后直接启用配置、应用、Moonlight、日志/诊断、维护、重启及当前平台固定服务控制，不再询问或保存权限开关。
 
 ```sh
 sunshine-client service stop

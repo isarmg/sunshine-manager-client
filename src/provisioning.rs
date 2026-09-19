@@ -10,7 +10,7 @@ use rand::RngCore;
 use serde::{Deserialize, Serialize};
 use std::{path::Path, sync::Arc, time::Duration};
 use sunshine_client_protocol::{
-    Binding, Capabilities, ClientOs, Effectiveness, PROTOCOL, SUNSHINE_VERSION, config::FIELDS,
+    Binding, Capabilities, ClientOs, Effectiveness, PROTOCOL, SUNSHINE_VERSION,
 };
 use tokio::sync::watch;
 use url::Url;
@@ -27,8 +27,6 @@ pub struct Bootstrap {
     pub sunshine_certificate: Option<String>,
     pub sunshine_username: Zeroizing<String>,
     pub sunshine_password: Zeroizing<String>,
-    #[serde(default)]
-    pub restart_allowed: bool,
 }
 #[derive(Serialize, Deserialize)]
 #[serde(deny_unknown_fields)]
@@ -191,7 +189,7 @@ struct PairingTarget {
 async fn resolve_pairing(config: &Bootstrap) -> Result<PairingTarget, ProvisionError> {
     let mut endpoint = Url::parse(&config.manager_endpoint).map_err(config_error)?;
     endpoint.set_scheme("https").map_err(config_error)?;
-    endpoint.set_path("/sunshine-client/v1/pairing");
+    endpoint.set_path("/sunshine-client/v2/pairing");
     let mut request = reqwest::Request::new(reqwest::Method::POST, endpoint);
     request.headers_mut().insert(
         reqwest::header::CONTENT_TYPE,
@@ -263,7 +261,7 @@ async fn provision(
     }
     let mut endpoint = Url::parse(&identity.config.manager_endpoint).map_err(config_error)?;
     endpoint.set_scheme("https").map_err(config_error)?;
-    endpoint.set_path("/sunshine-client/v1/identity");
+    endpoint.set_path("/sunshine-client/v2/identity");
     let client = system_client()?;
     let mut request = reqwest::Request::new(reqwest::Method::GET, endpoint.clone());
     let raw = Zeroizing::new(format!("Bearer {}", identity.credential.as_str()));
@@ -276,7 +274,7 @@ async fn provision(
     let binding: Binding = if response.status.is_success() {
         serde_json::from_slice(&response.body).map_err(config_error)?
     } else if response.status == reqwest::StatusCode::UNAUTHORIZED {
-        endpoint.set_path("/sunshine-client/v1/enroll");
+        endpoint.set_path("/sunshine-client/v2/enroll");
         let mut request = reqwest::Request::new(reqwest::Method::POST, endpoint);
         request.headers_mut().insert(
             reqwest::header::CONTENT_TYPE,
@@ -342,7 +340,9 @@ pub async fn pair(state_path: &Path) -> Result<(), ProvisionError> {
                 ProvisionError::SunshineVersionUnsupported
             }
             crate::adapter::AdapterError::UnsafeConfiguration
-            | crate::adapter::AdapterError::InvalidLocalEndpoint => ProvisionError::Configuration,
+            | crate::adapter::AdapterError::InvalidLocalEndpoint
+            | crate::adapter::AdapterError::ResourceConflict
+            | crate::adapter::AdapterError::UnsupportedCapability => ProvisionError::Configuration,
         })?
         .sunshine_version()
         .to_owned();
@@ -372,22 +372,31 @@ pub async fn run(state_path: &Path, shutdown: watch::Receiver<bool>) -> Result<(
     drop(store); // Do not retain the short provisioning lock across network waits.
     let journal =
         FileJournal::open(&state_path.join("journal")).map_err(|_| ProvisionError::Journal)?;
-    let executor = Arc::new(Executor::new(
+    let capabilities = Capabilities {
+        protocol: PROTOCOL.into(),
+        client_version: env!("CARGO_PKG_VERSION").into(),
+        os: client_os()?,
+        sunshine_version: identity.sunshine_version.clone(),
+        restart_allowed: true,
+        managed_fields: sunshine_client_protocol::config::FIELD_DEFINITIONS
+            .iter()
+            .map(|field| field.key.to_owned())
+            .collect(),
+        application_management: true,
+        application_host_commands_allowed: true,
+        moonlight_pairing_management: true,
+        diagnostics: true,
+        maintenance: true,
+        service_control: crate::adapter::platform_service_control_available(),
+    };
+    let executor = Arc::new(Executor::new_with_capabilities(
         identity.binding.clone(),
-        identity.config.restart_allowed,
+        capabilities.clone(),
         identity.config.adapter()?,
         journal,
     ));
     let connection =
         ManagerConnection::new(&identity.config.manager_endpoint, identity.credential)?;
-    let capabilities = Capabilities {
-        protocol: PROTOCOL.into(),
-        client_version: env!("CARGO_PKG_VERSION").into(),
-        os: client_os()?,
-        sunshine_version: identity.sunshine_version,
-        restart_allowed: identity.config.restart_allowed,
-        managed_fields: FIELDS.iter().map(|s| s.to_string()).collect(),
-    };
     let (health_tx, health_rx) = watch::channel(HealthObservation::default());
     let mut adapter = identity.config.adapter()?;
     // Read-only health probes do not share the mutation lane and survive a Sunshine restart.
@@ -427,8 +436,8 @@ pub async fn run(state_path: &Path, shutdown: watch::Receiver<bool>) -> Result<(
 #[cfg(test)]
 mod bootstrap_tests {
     fn configuration() -> serde_json::Value {
-        serde_json::json!({"manager_endpoint":"wss://manager.example.org/sunshine-client/v1/connect", "enrollment_token":"a".repeat(64),
-            "sunshine_endpoint":"https://127.0.0.1:47990/", "sunshine_certificate":null, "sunshine_username":"fixture", "sunshine_password":"local-only", "restart_allowed":false})
+        serde_json::json!({"manager_endpoint":"wss://manager.example.org/sunshine-client/v2/connect", "enrollment_token":"a".repeat(64),
+            "sunshine_endpoint":"https://127.0.0.1:47990/", "sunshine_certificate":null, "sunshine_username":"fixture", "sunshine_password":"local-only"})
     }
     #[test]
     fn bootstrap_accepts_pinned_sunshine_certificate_and_server_resolved_binding() {
@@ -440,6 +449,9 @@ mod bootstrap_tests {
             "sunshine_certificate_path",
             "manager_id",
             "device_id",
+            "restart_allowed",
+            "application_host_commands_allowed",
+            "service_control_mode",
         ] {
             let mut extra = config.clone();
             extra[field] = serde_json::json!("not permitted");

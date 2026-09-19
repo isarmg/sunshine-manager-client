@@ -74,7 +74,7 @@ fn credentials_update_preserves_binding_credential_and_execution_journal() {
     let _root = sunshine_client::storage::prepare_root(&state).unwrap();
     let store = ProtectedState::open(&state.join("provisioning")).unwrap();
     let binding = json!({"manager_id":uuid::Uuid::new_v4(),"device_id":uuid::Uuid::new_v4(),"installation_id":uuid::Uuid::new_v4()});
-    let identity = json!({"binding":binding,"credential":"b".repeat(64),"enrolled":true,"config":{"manager_endpoint":"wss://manager.example/sunshine-client/v1/connect","enrollment_token":"","sunshine_endpoint":"https://127.0.0.1:47990/","sunshine_certificate":"old-certificate","sunshine_username":"old","sunshine_password":"old-secret","restart_allowed":false}});
+    let identity = json!({"binding":binding,"credential":"b".repeat(64),"enrolled":true,"config":{"manager_endpoint":"wss://manager.example/sunshine-client/v2/connect","enrollment_token":"","sunshine_endpoint":"https://127.0.0.1:47990/","sunshine_certificate":"old-certificate","sunshine_username":"old","sunshine_password":"old-secret"}});
     store
         .put("identity.json", &serde_json::to_vec(&identity).unwrap())
         .unwrap();
@@ -128,7 +128,7 @@ fn configuration_revision_conflict_cannot_change_settings() {
     let candidate = temp.path().join("candidate.json");
     private_file(
         &candidate,
-        br#"{"sunshine_endpoint":"https://127.0.0.1:47991/","restart_allowed":false}"#,
+        br#"{"sunshine_endpoint":"https://127.0.0.1:47991/"}"#,
     );
     let result = call(
         &state,

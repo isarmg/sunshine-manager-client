@@ -97,7 +97,7 @@ def verify(archive, destination, sha):
     if seen != allowed:
         raise ValueError("incomplete package")
     manifest = json.loads((root / "manifest.json").read_text())
-    if manifest["source_commit"] != sha or manifest["target"] != target or manifest["protocol"] != "sunshine-management/1" or manifest["product"] != "sunshine-client":
+    if manifest["source_commit"] != sha or manifest["target"] != target or manifest["protocol"] != "sunshine-management/2" or manifest["product"] != "sunshine-client":
         raise ValueError("package identity mismatch")
     if name != f"sunshine-client-{manifest['version']}-{target}" or manifest["authenticode_signed"] is not False:
         raise ValueError("package version or signature declaration mismatch")
@@ -109,7 +109,7 @@ def verify(archive, destination, sha):
         raise ValueError("file checksum mismatch")
     binary = root / ("sunshine-client.exe" if windows else "sunshine-client")
     binary.chmod(0o755)
-    if run(str(binary), "--version") != f"sunshine-client {manifest['version']} (git {sha}; sunshine-management/1)":
+    if run(str(binary), "--version") != f"sunshine-client {manifest['version']} (git {sha}; sunshine-management/2)":
         raise ValueError("executable identity mismatch")
     return root, binary
 
@@ -126,7 +126,7 @@ def install_test(root, binary, temporary, installer=None, seed=None):
     fixture = temporary / "private-bootstrap"
     fixture.mkdir(mode=0o700)
     bootstrap = fixture / "bootstrap.json"
-    bootstrap.write_text(json.dumps({"manager_endpoint": "wss://127.0.0.1:9/sunshine-client/v1/connect", "enrollment_token": "a" * 64, "sunshine_endpoint": "https://127.0.0.1:47990/", "sunshine_username": "test", "sunshine_password": "installation-fixture-only", "restart_allowed": False}), encoding="utf-8")
+    bootstrap.write_text(json.dumps({"manager_endpoint": "wss://127.0.0.1:9/sunshine-client/v2/connect", "enrollment_token": "a" * 64, "sunshine_endpoint": "https://127.0.0.1:47990/", "sunshine_username": "test", "sunshine_password": "installation-fixture-only"}), encoding="utf-8")
     bootstrap.chmod(0o600)
     if windows:
         # Protect only the secret fixture, not extracted executable/scripts. Set explicit

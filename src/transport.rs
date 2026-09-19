@@ -27,7 +27,7 @@ use tokio_tungstenite::{
 use url::Url;
 use zeroize::Zeroizing;
 
-pub const CONNECT_PATH: &str = "/sunshine-client/v1/connect";
+pub const CONNECT_PATH: &str = "/sunshine-client/v2/connect";
 const IO_TIMEOUT: Duration = Duration::from_secs(10);
 const HEARTBEAT_INTERVAL: Duration = Duration::from_secs(15);
 const PEER_TIMEOUT: Duration = Duration::from_secs(45);

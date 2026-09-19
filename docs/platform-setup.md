@@ -1,6 +1,6 @@
 # 各平台安装、配置与覆盖升级
 
-适用于 0.1.4。Client 是管理代理；需要先安装 Sunshine 并在其 Web UI 设置用户名、密码。Manager 地址、Manager 配对码、Sunshine 本机地址和 Sunshine 管理凭据是不同的输入。每个平台只发布一个原生安装包，安装器检查平台/架构/权限、注册服务，然后由 `setup` 完成配置。
+适用于 0.2.0。Client 是管理代理；需要先安装 Sunshine 并在其 Web UI 设置用户名、密码。Manager 地址、Manager 配对码、Sunshine 本机地址和 Sunshine 管理凭据是不同的输入。每个平台只发布一个原生安装包，安装器检查平台/架构/权限、注册服务，然后由 `setup` 完成配置。
 
 ## Windows 11 x64
 
@@ -8,7 +8,7 @@
 
 ```powershell
 $client = "$env:ProgramFiles\SunshineClient\sunshine-client.exe"
-msiexec.exe /i .\sunshine-client-0.1.4-windows-x64.msi /norestart
+msiexec.exe /i .\sunshine-client-0.2.0-windows-x64.msi /norestart
 ```
 
 MSI 只安装程序并登记 Manual/Stopped 服务，不启动配对，也不读取任何秘密。安装完成后，在管理员终端显式运行 `& "$env:ProgramFiles\SunshineClient\sunshine-client.exe" setup --interactive`；原有 CLI 会在需要写入受保护状态时请求提权，`--help` 和 `--version` 不触发 UAC。配对失败不会回滚已提交的安装。
@@ -17,18 +17,18 @@ MSI 只安装程序并登记 Manual/Stopped 服务，不启动配对，也不读
 
 已有版本直接再次运行同一 MSI；原生安装器处理升级、修复、降级检查和服务登记，保留设备身份、凭据、任务记录及启动意图。需要再次设置时运行 `sunshine-client setup` 会复用有效身份或恢复未完成事务，不会强制重新配对。
 
-MSI 同版文件修复：`msiexec.exe /i "完整路径\sunshine-client-0.1.4-windows-x64.msi" REINSTALL=ALL REINSTALLMODE=amus /l*v "%TEMP%\sunshine-client-install.log"`（在 cmd 中执行）。安装器忙碌时等待其他安装结束；3010 表示 Windows 需要重启完成替换。使用 `Get-Service SunshineClient` 和 `sunshine-client service status` 检查服务。
+MSI 同版文件修复：`msiexec.exe /i "完整路径\sunshine-client-0.2.0-windows-x64.msi" REINSTALL=ALL REINSTALLMODE=amus /l*v "%TEMP%\sunshine-client-install.log"`（在 cmd 中执行）。安装器忙碌时等待其他安装结束；3010 表示 Windows 需要重启完成替换。使用 `Get-Service SunshineClient` 和 `sunshine-client service status` 检查服务。
 
 ## Ubuntu 24.04 x86_64
 
 ```sh
-sudo apt install ./sunshine-client_0.1.4_amd64.deb
+sudo apt install ./sunshine-client_0.2.0_amd64.deb
 sudo sunshine-client setup
 ```
 
 默认配置与状态位于 `/var/lib/sunshine-client`，运行账户 `sunshine-client`。安装后运行 `sudo sunshine-client setup`，按提示选择开机启动、立即启动并验证连接。日志：`sudo journalctl -u sunshine-client.service -n 100 --no-pager`。
 
-新 DEB 可直接覆盖旧版并保留状态；同版损坏执行 `sudo apt install --reinstall ./sunshine-client_0.1.4_amd64.deb`。升级会停止旧进程并恢复原来处于运行状态的服务，不清除身份或任务去重记录。若安装器没有交互终端，稍后运行 `sudo sunshine-client setup`。
+同版损坏执行 `sudo apt install --reinstall ./sunshine-client_0.2.0_amd64.deb`。0.2.0 不读取 v1 Bootstrap/协议状态；安装后使用当前输入重新运行 `sudo sunshine-client setup`。若安装器没有交互终端，稍后手动运行该命令。
 
 手工归档只包含可执行文件、文档和校验元数据，不包含 Shell/Python 安装包装脚本；生产安装和覆盖请使用 DEB。解压的可执行文件可用于临时诊断，但不替代原生服务安装器。
 
@@ -37,7 +37,7 @@ sudo sunshine-client setup
 只提供 Apple Silicon 原生 PKG，不提供 Intel 版本：
 
 ```sh
-sudo installer -pkg ./sunshine-client-0.1.4-macos-arm64-unsigned.pkg -target /
+sudo installer -pkg ./sunshine-client-0.2.0-macos-arm64-unsigned.pkg -target /
 sudo /usr/local/bin/sunshine-client setup
 ```
 
@@ -69,7 +69,7 @@ SHA-256 指纹。`doctor --sunshine` 的脱敏结果分别报告地址、信任�
 公开的首次配对入口使用受保护的 stdin JSON；字段与内部 `deploy/bootstrap.example.json` 不同：
 
 ```json
-{"server":"https://manager.example.org/","authorization_code":"REPLACE_WITH_INSTANCE_CODE","sunshine_endpoint":"https://127.0.0.1:47990/","sunshine_certificate_path":"/absolute/path/to/cacert.pem","sunshine_username":"REPLACE_LOCALLY","sunshine_password":"REPLACE_LOCALLY","restart_allowed":false}
+{"server":"https://manager.example.org/","authorization_code":"REPLACE_WITH_INSTANCE_CODE","sunshine_endpoint":"https://127.0.0.1:47990/","sunshine_certificate_path":"/absolute/path/to/cacert.pem","sunshine_username":"REPLACE_LOCALLY","sunshine_password":"REPLACE_LOCALLY"}
 ```
 
 此 JSON 只可交给 `sunshine-client setup --input-stdin --non-interactive` 的 stdin。占位符不能直接使用；证书
@@ -107,6 +107,6 @@ sudo security add-trusted-cert -d -r trustRoot -k /Library/Keychains/System.keyc
 
 `setup` 按配置、配对、服务注册、启动策略、运行状态和连接顺序执行后置验证。交互终端会逐步显示 `verified`；JSON 失败响应中的 `error.step` 指明失败关卡，`error.code` 和 `error.message` 给出稳定原因，操作系统服务命令失败时 `error.detail` 保留经过控制字符清理和长度限制的原始诊断。请求连接验证但服务未运行会直接失败，不再静默跳过后仍报告完成。设置写入完成与连接确认是不同层次；如果返回 `connection_unconfirmed`，保留现有身份并分别运行 `doctor --network` 和 `doctor --sunshine`，不能把它视为 Manager 与 Sunshine 均已连接，也不要删除状态重新配对。
 
-已有有效身份无需重复初始化或配对。再次运行 `setup` 会复用身份，待处理事务会调用 `pair resume`；`config show --format json` 查看脱敏配置与修订，候选配置只支持 `sunshine_endpoint`、`restart_allowed`；用 `config validate/diff/apply --file <绝对路径>`，提交还需要 `--expected-revision <当前修订>`，写入前停止服务。
+当前 v2 有效身份无需重复初始化或配对。再次运行 `setup` 会复用身份，待处理事务会调用 `pair resume`；`config show --format json` 查看脱敏配置与修订，候选配置只支持 `sunshine_endpoint`；用 `config validate/diff/apply --file <绝对路径>`，提交还需要 `--expected-revision <当前修订>`，写入前停止服务。Client 不再询问 Sunshine 管理权限，配对后直接启用当前平台支持的专用能力。
 
 `--config` 选择整个状态目录（`--state` 是兼容别名）；系统服务操作应使用上面的默认目录。配对响应丢失使用 `status`、`pair status` 或 `pair resume`；不要用清空状态来重试。强制文件覆盖不会清除设备身份、凭据或执行记录。若检测到指向其他程序的同名服务、符号链接或不可信目录，安装会给出错误并保留数据；先检查对应路径，避免盲目删除。

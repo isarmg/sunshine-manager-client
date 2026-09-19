@@ -93,6 +93,8 @@ fn sunshine_adapter_error(error: crate::adapter::AdapterError) -> Failure {
         | crate::adapter::AdapterError::InvalidLocalEndpoint => {
             fail(2, "invalid_sunshine_configuration")
         }
+        crate::adapter::AdapterError::ResourceConflict => fail(9, "sunshine_resource_conflict"),
+        crate::adapter::AdapterError::UnsupportedCapability => fail(10, "sunshine_capability_unavailable"),
     }
 }
 #[derive(Deserialize)]
@@ -107,8 +109,6 @@ struct PairInput {
     sunshine_certificate_path: Option<PathBuf>,
     sunshine_username: Zeroizing<String>,
     sunshine_password: Zeroizing<String>,
-    #[serde(default)]
-    restart_allowed: bool,
 }
 impl PairInput {
     fn bootstrap(self) -> Result<Bootstrap> {
@@ -123,7 +123,7 @@ impl PairInput {
             return Err(fail(2, "invalid_server_origin"));
         }
         url.set_scheme("wss").map_err(input_error)?;
-        url.set_path("/sunshine-client/v1/connect");
+        url.set_path("/sunshine-client/v2/connect");
         if self.sunshine_certificate.is_some() && self.sunshine_certificate_path.is_some() {
             return Err(fail(2, "duplicate_sunshine_certificate_source"));
         }
@@ -141,7 +141,6 @@ impl PairInput {
             sunshine_certificate,
             sunshine_username: self.sunshine_username,
             sunshine_password: self.sunshine_password,
-            restart_allowed: self.restart_allowed,
         };
         b.validate().map_err(provision_error)?;
         Ok(b)
@@ -311,8 +310,6 @@ fn prompt_sunshine_certificate() -> Result<Option<PathBuf>> {
 #[serde(deny_unknown_fields)]
 struct Settings {
     sunshine_endpoint: String,
-    #[serde(default)]
-    restart_allowed: bool,
 }
 #[derive(Deserialize)]
 #[serde(deny_unknown_fields)]
@@ -390,7 +387,6 @@ fn current(store: &ProtectedState) -> Result<(Bootstrap, Option<Identity>)> {
                 sunshine_certificate: None,
                 sunshine_username: Zeroizing::new(String::new()),
                 sunshine_password: Zeroizing::new(String::new()),
-                restart_allowed: settings.restart_allowed,
             },
             None,
         ))
@@ -407,7 +403,6 @@ fn current(store: &ProtectedState) -> Result<(Bootstrap, Option<Identity>)> {
 fn settings(b: &Bootstrap) -> Settings {
     Settings {
         sunshine_endpoint: b.sunshine_endpoint.clone(),
-        restart_allowed: b.restart_allowed,
     }
 }
 pub(crate) fn settings_revision(b: &Bootstrap) -> Result<String> {
@@ -608,7 +603,6 @@ fn execute_pair(args: &Args, path: &Path) -> Result<Value> {
                 sunshine_certificate_path: prompt_sunshine_certificate()?,
                 sunshine_username: Zeroizing::new(prompt("Sunshine username", false)?),
                 sunshine_password: Zeroizing::new(prompt("Sunshine password", true)?),
-                restart_allowed: prompt("Allow controlled restart? [no]", false)? == "yes",
             }
             .bootstrap()?,
         )
@@ -735,7 +729,7 @@ fn setup(args: &Args, path: PathBuf) -> Result<Value> {
             expected
                 .set_scheme("wss")
                 .map_err(|_| fail(2, "invalid_server_origin").at_step("configuration"))?;
-            expected.set_path("/sunshine-client/v1/connect");
+            expected.set_path("/sunshine-client/v2/connect");
             if identity.config.manager_endpoint != expected.as_str() {
                 return Err(
                     fail(5, "server_replacement_requires_pair_replace").at_step("configuration")
@@ -1156,7 +1150,6 @@ fn execute(args: &Args) -> Result<Value> {
                 return Err(fail(5, "revision_conflict"));
             }
             config.sunshine_endpoint = candidate.sunshine_endpoint;
-            config.restart_allowed = candidate.restart_allowed;
             let after = settings_revision(&config)?;
             if let Some(identity) = identity.as_mut() {
                 identity.config = config;
@@ -1203,7 +1196,6 @@ fn execute(args: &Args) -> Result<Value> {
             let before = settings_revision(&b)?;
             let old = serde_json::to_value(settings(&b)).map_err(storage_error)?;
             b.sunshine_endpoint = candidate.sunshine_endpoint;
-            b.restart_allowed = candidate.restart_allowed;
             let after = settings_revision(&b)?;
             if *action == "apply" {
                 if args.require("--expected-revision")? != before {
@@ -1279,7 +1271,6 @@ fn execute(args: &Args) -> Result<Value> {
                 } else {
                     "https://127.0.0.1:47990/".into()
                 },
-                restart_allowed: false,
             };
             validate_settings(&candidate)?;
             let _guard = MaintenanceGuard::acquire(&path).map_err(storage_error)?;
@@ -1484,7 +1475,7 @@ mod setup_tests {
     fn compatibility_manifest_tracks_the_manager_protocol() {
         let manifest: serde_json::Value =
             serde_json::from_str(include_str!("../compatibility.json")).unwrap();
-        assert_eq!(manifest["sunshine_manager_protocol"], 1);
-        assert_eq!(sunshine_client_protocol::PROTOCOL, "sunshine-management/1");
+        assert_eq!(manifest["sunshine_manager_protocol"], 2);
+        assert_eq!(sunshine_client_protocol::PROTOCOL, "sunshine-management/2");
     }
 }
