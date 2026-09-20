@@ -728,7 +728,7 @@ fn persistence_failure() -> Report {
 fn rejected_adapter(error: AdapterError) -> Report {
     Report::Rejected {
         reason: match error {
-            AdapterError::UnsupportedVersion => Rejection::UnsupportedVersion,
+            AdapterError::UnsupportedVersion { .. } => Rejection::UnsupportedVersion,
             AdapterError::UnsafeConfiguration => Rejection::UnsafeConfiguration,
             AdapterError::ResourceConflict => Rejection::ResourceConflict,
             AdapterError::UnsupportedCapability => Rejection::UnsupportedCapability,

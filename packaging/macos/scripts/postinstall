@@ -114,10 +114,11 @@ if [ -e "$marker" ] || [ -L "$marker" ]; then
   rm -f "$marker"
 fi
 
-if [ -t 0 ] && [ -t 1 ]; then
-  if ! "$link" setup --interactive; then
-    echo 'Setup was not completed; installation, identity and pairing progress were retained.' >&2
-  fi
-else
-  echo 'No interactive terminal was available; resume with: sudo /usr/local/bin/sunshine-client setup' >&2
-fi
+cat <<'EOF'
+
+sunshine-client installation completed. Configuration is pending.
+Run setup separately from the installer with:
+
+  sudo /usr/local/bin/sunshine-client setup
+
+EOF

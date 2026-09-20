@@ -394,13 +394,15 @@ async fn journal_capacity_exhaustion_rejects_instead_of_evicting_deduplication()
 
 #[test]
 fn configuration_metadata_and_unsupported_versions_are_not_saved() {
-    assert_eq!(
+    assert!(matches!(
         Configuration::from_response(
             json!({"status": true, "platform": "linux", "version": "master"})
-        )
-        .err(),
-        Some(AdapterError::UnsupportedVersion)
-    );
+        ),
+        Err(AdapterError::UnsupportedVersion {
+            detected: Some(ref version),
+            ..
+        }) if version == "master"
+    ));
     assert_eq!(Configuration::from_response(json!({"status": true, "platform": "linux", "version": SUNSHINE_VERSION, "status_code": 200})).err(), Some(AdapterError::UnsafeConfiguration));
     let empty = Configuration::from_response(
         json!({"status": true, "platform": "linux", "version": SUNSHINE_VERSION}),
@@ -412,13 +414,21 @@ fn configuration_metadata_and_unsupported_versions_are_not_saved() {
             .fields
             .is_empty()
     );
-    assert_eq!(
+    assert!(matches!(
         Configuration::from_response(
             json!({"status": true, "platform": "linux", "version": "2026.516.143833"}),
-        )
-        .err(),
-        Some(AdapterError::UnsupportedVersion)
-    );
+        ),
+        Err(AdapterError::UnsupportedVersion {
+            detected: Some(ref version),
+            ..
+        }) if version == "2026.516.143833"
+    ));
+    assert!(matches!(
+        Configuration::from_response(
+            json!({"status": true, "platform": "linux", "version": "bad\nversion"}),
+        ),
+        Err(AdapterError::UnsupportedVersion { detected: None, .. })
+    ));
 }
 
 #[test]

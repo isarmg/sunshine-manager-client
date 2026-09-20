@@ -1,6 +1,6 @@
 [package]
 name = "sunshine-client"
-version = "0.2.2"
+version = "0.2.3"
 edition = "2024"
 rust-version = "1.98"
 license = "Apache-2.0"
@@ -13,8 +13,8 @@ futures-util = { version = "0.3", features = ["sink"] }
 reqwest = { version = "0.13", default-features = false, features = ["http2", "json", "rustls"] }
 rand = "0.8"
 uuid = { version = "1", features = ["v4", "serde"] }
-sarmg-client-cli = { git = "https://github.com/isarmg/sarmg-foundation-client.git", rev = "995331aa56a9373df0eb090d017532273f00d6ac", version = "=0.9.13" }
-sarmg-client-runtime = { git = "https://github.com/isarmg/sarmg-foundation-client.git", rev = "995331aa56a9373df0eb090d017532273f00d6ac", version = "=0.9.13" }
+sarmg-client-cli = { git = "https://github.com/isarmg/sarmg-foundation-client.git", rev = "8b8ea8517a3cf68e566f8230e87bae9ab40b4106", version = "=0.9.14" }
+sarmg-client-runtime = { git = "https://github.com/isarmg/sarmg-foundation-client.git", rev = "8b8ea8517a3cf68e566f8230e87bae9ab40b4106", version = "=0.9.14" }
 serde = { version = "1", features = ["derive"] }
 serde_json = "1"
 sha2 = "0.10"
@@ -27,7 +27,7 @@ url = "2"
 zeroize = { version = "1", features = ["serde"] }
 
 [target.'cfg(unix)'.dependencies]
-sarmg-client-fs-safety = { git = "https://github.com/isarmg/sarmg-foundation-client.git", rev = "995331aa56a9373df0eb090d017532273f00d6ac", version = "=0.9.13" }
+sarmg-client-fs-safety = { git = "https://github.com/isarmg/sarmg-foundation-client.git", rev = "8b8ea8517a3cf68e566f8230e87bae9ab40b4106", version = "=0.9.14" }
 
 [target.'cfg(target_os = "windows")'.dependencies]
 rusqlite = { version = "0.32", features = ["bundled"] }

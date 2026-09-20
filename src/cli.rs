@@ -32,6 +32,9 @@ impl ProductErrorCatalog for SunshineErrorCatalog {
             "credential_rejected" => Some(
                 "Sunshine Manager rejected the instance authorization code or client credential.",
             ),
+            "client_credential_rejected" => Some(
+                "Sunshine Manager rejected the saved client credential or no longer has this binding.",
+            ),
             "invalid_server_origin" => {
                 Some("The Sunshine Manager address must be a valid HTTPS origin.")
             }
@@ -76,6 +79,12 @@ impl ProductErrorCatalog for SunshineErrorCatalog {
             "sunshine_version_unsupported" => {
                 Some("The installed local Sunshine version is unsupported.")
             }
+            "state_schema_unsupported" => {
+                Some("The stored Sunshine Client state belongs to an unsupported schema.")
+            }
+            "state_document_corrupt" => {
+                Some("A protected Sunshine Client state document is malformed.")
+            }
             "sunshine_resource_conflict" => {
                 Some("Local Sunshine changed while the requested resource was being updated.")
             }
@@ -93,6 +102,9 @@ impl ProductErrorCatalog for SunshineErrorCatalog {
             ),
             "credential_rejected" => Some(format!(
                 "Create or rotate this Sunshine instance authorization code, then run `{product} setup --interactive`."
+            )),
+            "client_credential_rejected" => Some(format!(
+                "Create a new instance authorization code, then run `{product} pair replace --interactive`."
             )),
             "invalid_server_origin"
             | "pairing_postcondition_unconfirmed"
@@ -118,6 +130,12 @@ impl ProductErrorCatalog for SunshineErrorCatalog {
             "sunshine_version_unsupported" | "sunshine_capability_unavailable" => {
                 Some("Upgrade local Sunshine to a supported current version.".into())
             }
+            "state_schema_unsupported" => Some(format!(
+                "Archive the existing state, then run current `{product} setup --interactive` with a new authorization code."
+            )),
+            "state_document_corrupt" => Some(format!(
+                "Run `{product} doctor` and restore or archive the reported state artifact before Setup."
+            )),
             _ => None,
         }
     }
@@ -166,11 +184,31 @@ fn storage_error(error: impl std::fmt::Debug + std::any::Any) -> Failure {
             error
         }
         crate::storage::StorageError::Unsafe => fail(8, "unsafe_or_corrupt_state"),
+        crate::storage::StorageError::DocumentCorrupt { artifact } => {
+            fail(8, "state_document_corrupt").with_detail(format!("artifact={artifact}"))
+        }
+        crate::storage::StorageError::UnsupportedSchema {
+            artifact,
+            detected,
+            supported,
+        } => fail(10, "state_schema_unsupported").with_detail(format!(
+            "artifact={artifact};detected={detected};supported={supported}"
+        )),
     }
 }
 fn provision_error(e: ProvisionError) -> Failure {
     match e {
         ProvisionError::Configuration => fail(2, "invalid_configuration"),
+        ProvisionError::StateDocumentCorrupt { artifact } => {
+            fail(8, "state_document_corrupt").with_detail(format!("artifact={artifact}"))
+        }
+        ProvisionError::StateSchemaUnsupported {
+            artifact,
+            detected,
+            supported,
+        } => fail(10, "state_schema_unsupported").with_detail(format!(
+            "artifact={artifact};detected={detected};supported={supported}"
+        )),
         ProvisionError::Rejected => fail(7, "credential_rejected"),
         ProvisionError::Unavailable | ProvisionError::RateLimited => fail(6, "server_unavailable"),
         ProvisionError::Unsupported => fail(10, "unsupported_protocol_or_platform"),
@@ -181,7 +219,17 @@ fn provision_error(e: ProvisionError) -> Failure {
         ProvisionError::PairingUnexpectedHttpStatus => fail(10, "pairing_unexpected_http_status"),
         ProvisionError::SunshineCredentialsRejected => fail(7, "sunshine_credentials_rejected"),
         ProvisionError::SunshineApiUnavailable => fail(6, "sunshine_api_unavailable"),
-        ProvisionError::SunshineVersionUnsupported => fail(10, "sunshine_version_unsupported"),
+        ProvisionError::SunshineVersionUnsupported { detected, origin } => {
+            let source = match origin {
+                crate::adapter::VersionSource::ConfigurationResponse => "configuration_response",
+                crate::adapter::VersionSource::HttpUpgradeRequired => "http_upgrade_required",
+            };
+            fail(10, "sunshine_version_unsupported").with_detail(format!(
+                "detected={};supported={};source={source}",
+                detected.as_deref().unwrap_or("unknown"),
+                sunshine_client_protocol::SUPPORTED_SUNSHINE_VERSIONS.join(",")
+            ))
+        }
         ProvisionError::Unpaired => fail(4, "awaiting_pairing"),
         ProvisionError::Transport(error) => match error {
             crate::transport::TransportError::Configuration => fail(2, "invalid_configuration"),
@@ -207,10 +255,16 @@ fn sunshine_adapter_error(error: crate::adapter::AdapterError) -> Failure {
             .with_detail(
                 "tcp=unknown tls=unknown api=unavailable credentials=unknown version=not_checked",
             ),
-        crate::adapter::AdapterError::UnsupportedVersion => {
-            fail(10, "sunshine_version_unsupported").with_detail(
-                "tcp=connected tls=verified api=available credentials=accepted version=unsupported",
-            )
+        crate::adapter::AdapterError::UnsupportedVersion { detected, origin } => {
+            let source = match origin {
+                crate::adapter::VersionSource::ConfigurationResponse => "configuration_response",
+                crate::adapter::VersionSource::HttpUpgradeRequired => "http_upgrade_required",
+            };
+            fail(10, "sunshine_version_unsupported").with_detail(format!(
+                "tcp=connected tls=verified api=available credentials=accepted detected={};supported={};source={source}",
+                detected.as_deref().unwrap_or("unknown"),
+                sunshine_client_protocol::SUPPORTED_SUNSHINE_VERSIONS.join(",")
+            ))
         }
         crate::adapter::AdapterError::UnsafeConfiguration
         | crate::adapter::AdapterError::InvalidLocalEndpoint => {
@@ -280,7 +334,7 @@ fn identity(store: &ProtectedState) -> Result<Option<Identity>> {
     store
         .read("identity.json")
         .map_err(storage_error)?
-        .map(|b| serde_json::from_slice(&Zeroizing::new(b)).map_err(storage_error))
+        .map(|b| provisioning::decode_identity(&Zeroizing::new(b)).map_err(provision_error))
         .transpose()
 }
 fn current(store: &ProtectedState) -> Result<(Bootstrap, Option<Identity>)> {
@@ -315,7 +369,10 @@ fn current(store: &ProtectedState) -> Result<(Bootstrap, Option<Identity>)> {
                 .map_err(storage_error)?
                 .ok_or_else(|| fail(4, "awaiting_configuration"))?,
         );
-        Ok((serde_json::from_slice(&bytes).map_err(storage_error)?, None))
+        Ok((
+            provisioning::decode_bootstrap(&bytes).map_err(provision_error)?,
+            None,
+        ))
     }
 }
 fn settings(b: &Bootstrap) -> Settings {
@@ -493,6 +550,12 @@ fn wait_for_healthy(path: &Path, timeout: std::time::Duration) -> Result<Value> 
         if status["health"] == "healthy" {
             return Ok(status);
         }
+        if status["runtime"]["last_error_code"] == "credential_rejected" {
+            return Err(fail(7, "client_credential_rejected"));
+        }
+        if status["runtime"]["last_error_code"] == "unsupported_protocol_or_platform" {
+            return Err(fail(10, "unsupported_protocol_or_platform"));
+        }
         if std::time::Instant::now() >= deadline {
             return Err(fail(9, "connection_unconfirmed"));
         }
@@ -616,7 +679,19 @@ fn execute_pair(args: &Args, path: &Path) -> Result<Value> {
     let result = rt.block_on(async {
         tokio::select! {
             r = tokio::time::timeout(remaining, provisioning::pair(path)) =>
-                r.map_err(|_| fail(9, "pairing_result_uncertain"))?.map_err(provision_error),
+                r.map_err(|_| fail(9, "pairing_result_uncertain"))?.map_err(|error| {
+                    let step = if matches!(
+                        &error,
+                        ProvisionError::SunshineCredentialsRejected
+                            | ProvisionError::SunshineApiUnavailable
+                            | ProvisionError::SunshineVersionUnsupported { .. }
+                    ) {
+                        "local_sunshine_preflight"
+                    } else {
+                        "manager_pairing"
+                    };
+                    provision_error(error).at_step(step)
+                }),
             _ = tokio::signal::ctrl_c() => Err(fail(130, "interrupted_resume_required")),
         }
     });
@@ -720,8 +795,12 @@ fn setup(args: &Args, path: PathBuf) -> Result<Value> {
             vec!["pair".into()]
         };
         let interactive = !resume && !args.has("--input-stdin") && !args.has("--non-interactive");
-        execute_pair(&setup_args(args, pair_words, interactive), &path)
-            .map_err(|error| error.at_step("pairing"))?
+        execute_pair(&setup_args(args, pair_words, interactive), &path).map_err(|mut error| {
+            if error.step.is_none() {
+                error.step = Some("pairing");
+            }
+            error
+        })?
     };
     let pairing_status =
         local_status(&path).map_err(|error| setup_failure(error, &pairing, "pairing"))?;

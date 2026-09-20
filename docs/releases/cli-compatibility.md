@@ -1,18 +1,18 @@
-# Sunshine Client 0.2.2 兼容边界
+# Sunshine Client 0.2.3 兼容边界
 
-当前正式版本为 `0.2.2`，支持 Windows x64、Linux x64 和 macOS Apple Silicon。部署时同时核对版本、源码
+当前正式版本为 `0.2.3`，支持 Windows x64、Linux x64 和 macOS Apple Silicon。部署时同时核对版本、源码
 身份、Manager 版本和 Sunshine 固定版本。
 
 | 维度 | 当前契约 |
 |---|---|
 | Manager 协议 | 仅 `sunshine-management/2`；不协商 v1 |
 | Sunshine | 仅 `v2026.914.233613` |
-| Client Foundation | `0.9.13`，固定提交 `995331aa56a9373df0eb090d017532273f00d6ac` |
+| Client Foundation | `0.9.14`，固定提交 `8b8ea8517a3cf68e566f8230e87bae9ab40b4106` |
 | Bootstrap | 当前严格字段；旧 `restart_allowed`、应用权限和服务模式字段会被拒绝 |
 | 能力 | 配对后直接启用 Sunshine 专用能力；服务控制按平台固定适配器声明 |
 | IPC | Foundation `GetStatus/1`，进程世代、安装身份和配置修订校验 |
 
-0.2.2 不读取旧 Bootstrap、旧协议身份或旧任务作为兼容输入，也不自动降级。部署 0.2.2 前停止旧服务、
+0.2.3 不读取旧 Bootstrap、旧协议身份或旧任务作为兼容输入，也不自动降级。部署 0.2.3 前停止旧服务、
 保全旧状态用于审计，在 Manager 0.11.0 创建/轮换授权码，并用当前受保护输入重新运行 `setup`。不要删除旧日志
 后假定副作用没有发生。
 

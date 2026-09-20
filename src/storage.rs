@@ -12,11 +12,36 @@ pub enum StorageError {
     Busy,
     #[error("state publication committed but durability was not confirmed")]
     Published,
+    #[error("protected state document is malformed")]
+    DocumentCorrupt { artifact: &'static str },
+    #[error("protected state uses an unsupported schema")]
+    UnsupportedSchema {
+        artifact: &'static str,
+        detected: &'static str,
+        supported: &'static str,
+    },
 }
 pub(crate) fn storage_error(error: impl std::fmt::Debug + std::any::Any) -> StorageError {
     let error = &error as &dyn std::any::Any;
     if let Some(error) = error.downcast_ref::<StorageError>() {
         return *error;
+    }
+    if let Some(error) = error.downcast_ref::<crate::provisioning::ProvisionError>() {
+        return match error {
+            crate::provisioning::ProvisionError::StateDocumentCorrupt { artifact } => {
+                StorageError::DocumentCorrupt { artifact }
+            }
+            crate::provisioning::ProvisionError::StateSchemaUnsupported {
+                artifact,
+                detected,
+                supported,
+            } => StorageError::UnsupportedSchema {
+                artifact,
+                detected,
+                supported,
+            },
+            _ => StorageError::Unsafe,
+        };
     }
     if let Some(error) = error.downcast_ref::<std::io::Error>() {
         return match error.kind() {

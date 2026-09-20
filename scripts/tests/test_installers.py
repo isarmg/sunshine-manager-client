@@ -48,7 +48,7 @@ class InstallerTests(unittest.TestCase):
             for script in ('preinst', 'postinst', 'prerm', 'postrm'):
                 subprocess.run(['sh', '-n', str(directory / 'control' / script)], check=True)
 
-    def test_macos_pkg_is_the_native_installer_and_runs_setup_after_install(self):
+    def test_macos_pkg_is_native_and_keeps_setup_outside_the_install_transaction(self):
         builder = ROOT / 'packaging/macos/build-pkg.sh'
         preinstall = ROOT / 'packaging/macos/scripts/preinstall'
         postinstall = ROOT / 'packaging/macos/scripts/postinstall'
@@ -57,7 +57,9 @@ class InstallerTests(unittest.TestCase):
         self.assertTrue(postinstall.is_file())
         self.assertIn('pkgbuild', builder.read_text())
         postinstall_text = postinstall.read_text()
-        self.assertIn('setup --interactive', postinstall_text)
+        self.assertNotIn('setup --interactive', postinstall_text)
+        self.assertNotIn('"$link" setup', postinstall_text)
+        self.assertIn('Configuration is pending', postinstall_text)
         self.assertIn('/private/etc/newsyslog.d', postinstall_text)
         self.assertIn('/private/var/run', postinstall_text)
         self.assertNotIn('install-macos.sh', builder.read_text())

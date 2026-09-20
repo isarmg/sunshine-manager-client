@@ -397,7 +397,7 @@ async fn sunshine_http_credentials_api_and_version_failures_are_distinct() {
     ));
     assert!(matches!(
         adapter(&fixture).read().await,
-        Err(AdapterError::UnsupportedVersion)
+        Err(AdapterError::UnsupportedVersion { .. })
     ));
 }
 

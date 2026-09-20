@@ -1,6 +1,6 @@
 //! Explicit local provisioning. No secret command-line arguments or remote installation.
 use crate::{
-    adapter::{LocalSunshine, Sunshine},
+    adapter::{LocalSunshine, Sunshine, VersionSource},
     engine::Executor,
     journal::FileJournal,
     storage::{ProtectedState, StorageError},
@@ -46,6 +46,14 @@ pub enum ProvisionError {
     Storage(#[from] StorageError),
     #[error("invalid protected bootstrap configuration")]
     Configuration,
+    #[error("protected state document is malformed")]
+    StateDocumentCorrupt { artifact: &'static str },
+    #[error("protected state uses an unsupported schema")]
+    StateSchemaUnsupported {
+        artifact: &'static str,
+        detected: &'static str,
+        supported: &'static str,
+    },
     #[error("Manager enrollment unavailable; retained identity allows a safe retry")]
     Unavailable,
     #[error("device credential or enrollment ticket rejected; local administrator action required")]
@@ -69,7 +77,10 @@ pub enum ProvisionError {
     #[error("Sunshine HTTPS API is unavailable")]
     SunshineApiUnavailable,
     #[error("Sunshine version is unsupported")]
-    SunshineVersionUnsupported,
+    SunshineVersionUnsupported {
+        detected: Option<String>,
+        origin: VersionSource,
+    },
     #[error("awaiting_pairing: run setup or pair explicitly")]
     Unpaired,
     #[error(transparent)]
@@ -80,16 +91,65 @@ pub enum ProvisionError {
 fn config_error(_: impl std::fmt::Debug) -> ProvisionError {
     ProvisionError::Configuration
 }
+
+fn classify_state_document(bytes: &[u8], artifact: &'static str) -> Result<(), ProvisionError> {
+    let value: serde_json::Value = serde_json::from_slice(bytes)
+        .map_err(|_| ProvisionError::StateDocumentCorrupt { artifact })?;
+    let object = value
+        .as_object()
+        .ok_or(ProvisionError::StateDocumentCorrupt { artifact })?;
+    let legacy_shape = |candidate: &serde_json::Map<String, serde_json::Value>| {
+        candidate.contains_key("sunshine_certificate")
+            || candidate.contains_key("restart_allowed")
+            || candidate
+                .get("manager_endpoint")
+                .and_then(serde_json::Value::as_str)
+                .is_some_and(|endpoint| endpoint.contains("/sunshine-client/v1/"))
+    };
+    let legacy = legacy_shape(object)
+        || object
+            .get("config")
+            .and_then(serde_json::Value::as_object)
+            .is_some_and(legacy_shape);
+    if legacy {
+        return Err(ProvisionError::StateSchemaUnsupported {
+            artifact,
+            detected: "sunshine-client-v1",
+            supported: "sunshine-client-v2",
+        });
+    }
+    Err(ProvisionError::StateDocumentCorrupt { artifact })
+}
+
+pub(crate) fn decode_bootstrap(bytes: &[u8]) -> Result<Bootstrap, ProvisionError> {
+    match serde_json::from_slice(bytes) {
+        Ok(value) => Ok(value),
+        Err(_) => {
+            classify_state_document(bytes, "bootstrap")?;
+            unreachable!()
+        }
+    }
+}
+
+pub(crate) fn decode_identity(bytes: &[u8]) -> Result<Identity, ProvisionError> {
+    match serde_json::from_slice(bytes) {
+        Ok(value) => Ok(value),
+        Err(_) => {
+            classify_state_document(bytes, "identity")?;
+            unreachable!()
+        }
+    }
+}
 /// Validate locally before accepting a bootstrap; never print its secret fields.
 pub(crate) fn validate_bootstrap(bytes: &[u8]) -> Result<(), ProvisionError> {
-    let config: Bootstrap = serde_json::from_slice(bytes).map_err(config_error)?;
+    let config = decode_bootstrap(bytes)?;
     config.validate()
 }
 pub(crate) fn pending_retry(config: &[u8], identity: &[u8]) -> bool {
-    let Ok(incoming) = serde_json::from_slice::<Bootstrap>(config) else {
+    let Ok(incoming) = decode_bootstrap(config) else {
         return false;
     };
-    let Ok(existing) = serde_json::from_slice::<Identity>(identity) else {
+    let Ok(existing) = decode_identity(identity) else {
         return false;
     };
     !existing.enrolled && incoming == existing.config
@@ -229,14 +289,14 @@ async fn provision(
     observed_sunshine_version: &str,
 ) -> Result<Identity, ProvisionError> {
     let mut identity = if let Some(bytes) = store.read("identity.json")? {
-        serde_json::from_slice::<Identity>(&Zeroizing::new(bytes)).map_err(config_error)?
+        decode_identity(&Zeroizing::new(bytes))?
     } else {
         let bytes = Zeroizing::new(
             store
                 .read("bootstrap.json")?
                 .ok_or(ProvisionError::Configuration)?,
         );
-        let config: Bootstrap = serde_json::from_slice(&bytes).map_err(config_error)?;
+        let config = decode_bootstrap(&bytes)?;
         config.validate()?;
         let target = resolve_pairing(&config).await?;
         let mut random = [0u8; 32];
@@ -310,16 +370,13 @@ pub async fn pair(state_path: &Path) -> Result<(), ProvisionError> {
     let _root = crate::storage::prepare_root(state_path)?;
     let store = ProtectedState::open(&state_path.join("provisioning"))?;
     let config: Bootstrap = if let Some(bytes) = store.read("identity.json")? {
-        serde_json::from_slice::<Identity>(&Zeroizing::new(bytes))
-            .map_err(config_error)?
-            .config
+        decode_identity(&Zeroizing::new(bytes))?.config
     } else {
-        serde_json::from_slice(&Zeroizing::new(
+        decode_bootstrap(&Zeroizing::new(
             store
                 .read("bootstrap.json")?
                 .ok_or(ProvisionError::Configuration)?,
-        ))
-        .map_err(config_error)?
+        ))?
     };
     let sunshine_version = config
         .adapter()?
@@ -330,8 +387,8 @@ pub async fn pair(state_path: &Path) -> Result<(), ProvisionError> {
                 ProvisionError::SunshineCredentialsRejected
             }
             crate::adapter::AdapterError::ApiUnavailable => ProvisionError::SunshineApiUnavailable,
-            crate::adapter::AdapterError::UnsupportedVersion => {
-                ProvisionError::SunshineVersionUnsupported
+            crate::adapter::AdapterError::UnsupportedVersion { detected, origin } => {
+                ProvisionError::SunshineVersionUnsupported { detected, origin }
             }
             crate::adapter::AdapterError::UnsafeConfiguration
             | crate::adapter::AdapterError::InvalidLocalEndpoint
@@ -353,7 +410,7 @@ pub async fn run(state_path: &Path, shutdown: watch::Receiver<bool>) -> Result<(
             .read("identity.json")?
             .ok_or(ProvisionError::Unpaired)?,
     );
-    let identity: Identity = serde_json::from_slice(&bytes).map_err(config_error)?;
+    let identity = decode_identity(&bytes)?;
     if !identity.enrolled {
         return Err(ProvisionError::Unpaired);
     }
@@ -421,14 +478,30 @@ pub async fn run(state_path: &Path, shutdown: watch::Receiver<bool>) -> Result<(
             tokio::time::sleep(Duration::from_secs(10)).await;
         }
     };
-    tokio::select! {
+    let result = tokio::select! {
         result=connection.run(identity.binding,capabilities,executor,health_rx,shutdown)=>result.map_err(ProvisionError::from),
         _=monitor=>Err(ProvisionError::Unavailable),
+    };
+    if let Err(error) = &result {
+        let code = match error {
+            ProvisionError::Transport(TransportError::Revoked) | ProvisionError::Rejected => {
+                "credential_rejected"
+            }
+            ProvisionError::Transport(TransportError::Protocol) | ProvisionError::Unsupported => {
+                "unsupported_protocol_or_platform"
+            }
+            ProvisionError::SunshineCredentialsRejected => "sunshine_credentials_rejected",
+            ProvisionError::SunshineVersionUnsupported { .. } => "sunshine_version_unsupported",
+            _ => "runtime_failure",
+        };
+        crate::runtime_status::observe("last_error_code", serde_json::json!(code));
     }
+    result
 }
 
 #[cfg(test)]
 mod bootstrap_tests {
+    use super::ProvisionError;
     fn configuration() -> serde_json::Value {
         serde_json::json!({"manager_endpoint":"wss://manager.example.org/sunshine-client/v2/connect", "enrollment_token":"a".repeat(64),
             "sunshine_endpoint":"https://127.0.0.1:47990/", "sunshine_username":"fixture", "sunshine_password":"local-only"})
@@ -452,6 +525,37 @@ mod bootstrap_tests {
             extra[field] = serde_json::json!("not permitted");
             assert!(super::validate_bootstrap(&serde_json::to_vec(&extra).unwrap()).is_err());
         }
+    }
+
+    #[test]
+    fn legacy_bootstrap_is_rejected_as_unsupported_without_migration() {
+        let legacy = serde_json::json!({
+            "manager_endpoint": "wss://manager.example.org/sunshine-client/v1/connect",
+            "enrollment_token": "a".repeat(64),
+            "sunshine_endpoint": "https://127.0.0.1:47990/",
+            "sunshine_username": "fixture",
+            "sunshine_password": "secret",
+            "sunshine_certificate": "legacy",
+            "restart_allowed": true
+        });
+        assert!(matches!(
+            super::decode_bootstrap(&serde_json::to_vec(&legacy).unwrap()),
+            Err(ProvisionError::StateSchemaUnsupported {
+                artifact: "bootstrap",
+                detected: "sunshine-client-v1",
+                supported: "sunshine-client-v2"
+            })
+        ));
+    }
+
+    #[test]
+    fn malformed_bootstrap_is_not_misreported_as_an_unsafe_acl() {
+        assert!(matches!(
+            super::decode_bootstrap(br#"{"manager_endpoint":"#),
+            Err(ProvisionError::StateDocumentCorrupt {
+                artifact: "bootstrap"
+            })
+        ));
     }
     #[test]
     fn retry_preserves_pending_identity_and_refuses_changed_or_enrolled_configuration() {
@@ -559,7 +663,7 @@ mod error_tests {
 pub(crate) async fn network_probe(config: &Bootstrap) -> Result<serde_json::Value, ProvisionError> {
     let mut url = Url::parse(&config.manager_endpoint).map_err(config_error)?;
     url.set_scheme("https").map_err(config_error)?;
-    url.set_path("/health/live");
+    url.set_path("/healthz");
     let client = system_client()?;
     let request = client.get(url).build().map_err(config_error)?;
     let response = execute_bounded(&client, request).await?;

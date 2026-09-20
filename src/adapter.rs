@@ -24,14 +24,23 @@ use zeroize::Zeroizing;
 pub const MAX_CONFIG_BYTES: usize = 512 * 1024;
 
 /// Never print upstream errors/bodies: they may include local settings or credentials.
-#[derive(Debug, Clone, Copy, PartialEq, Eq, thiserror::Error)]
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum VersionSource {
+    ConfigurationResponse,
+    HttpUpgradeRequired,
+}
+
+#[derive(Debug, Clone, PartialEq, Eq, thiserror::Error)]
 pub enum AdapterError {
     #[error("Sunshine rejected the configured local credentials")]
     CredentialsRejected,
     #[error("Sunshine HTTPS API is unavailable")]
     ApiUnavailable,
     #[error("unsupported Sunshine version")]
-    UnsupportedVersion,
+    UnsupportedVersion {
+        detected: Option<String>,
+        origin: VersionSource,
+    },
     #[error("unsafe or malformed Sunshine configuration")]
     UnsafeConfiguration,
     #[error("invalid local HTTPS configuration")]
@@ -40,6 +49,11 @@ pub enum AdapterError {
     ResourceConflict,
     #[error("the locally selected adapter does not support this capability")]
     UnsupportedCapability,
+}
+
+fn bounded_version_diagnostic(value: &str) -> Option<String> {
+    (!value.is_empty() && value.len() <= 64 && value.bytes().all(|byte| byte.is_ascii_graphic()))
+        .then(|| value.to_owned())
 }
 
 /// Full configuration stays on the Client. Deliberately not Debug or Serialize.
@@ -64,7 +78,10 @@ impl Configuration {
             .and_then(|value| value.as_str().map(str::to_owned))
             .ok_or(AdapterError::UnsafeConfiguration)?;
         if !sunshine_client_protocol::is_supported_sunshine_version(&sunshine_version) {
-            return Err(AdapterError::UnsupportedVersion);
+            return Err(AdapterError::UnsupportedVersion {
+                detected: bounded_version_diagnostic(&sunshine_version),
+                origin: VersionSource::ConfigurationResponse,
+            });
         }
         let platform = response
             .remove("platform")
@@ -475,7 +492,10 @@ impl LocalSunshine {
             return Err(AdapterError::CredentialsRejected);
         }
         if status.as_u16() == 426 {
-            return Err(AdapterError::UnsupportedVersion);
+            return Err(AdapterError::UnsupportedVersion {
+                detected: None,
+                origin: VersionSource::HttpUpgradeRequired,
+            });
         }
         if !status.is_success() {
             return Err(AdapterError::ApiUnavailable);
