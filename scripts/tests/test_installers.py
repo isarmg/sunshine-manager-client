@@ -11,13 +11,35 @@ ROOT = Path(__file__).resolve().parents[2]
 class InstallerTests(unittest.TestCase):
     def test_windows_service_install_does_not_launch_interactive_setup(self):
         tree = ET.parse(ROOT / 'packaging/windows/Package.wxs')
-        ns = {'w': 'http://wixtoolset.org/schemas/v4/wxs'}
+        ns = {
+            'w': 'http://wixtoolset.org/schemas/v4/wxs',
+            'ui': 'http://wixtoolset.org/schemas/v4/wxs/ui',
+        }
         service = tree.find('.//w:ServiceInstall', ns)
         self.assertEqual(service.get('Name'), 'SunshineClient')
         self.assertEqual(service.get('Start'), 'demand')
         self.assertIn('service --state', service.get('Arguments'))
         self.assertIsNone(tree.find('.//w:ServiceControl', ns).get('Start'))
-        self.assertFalse(tree.findall('.//w:RegistryValue', ns))
+        ui = tree.find('.//ui:WixUI', ns)
+        self.assertEqual(ui.get('Id'), 'WixUI_FeatureTree')
+        self.assertEqual(ui.get('InstallDirectory'), 'INSTALLFOLDER')
+        install_location = tree.find('.//w:RegistryValue[@Name="InstallLocation"]', ns)
+        self.assertIsNotNone(install_location)
+        self.assertEqual(install_location.get('Value'), '[INSTALLFOLDER]')
+        features = {feature.get('Id'): feature for feature in tree.findall('.//w:Feature', ns)}
+        self.assertEqual(features['PreserveConfiguration'].get('AllowAbsent'), 'yes')
+        self.assertEqual(features['PreserveData'].get('AllowAbsent'), 'yes')
+        actions = {action.get('Id'): action for action in tree.findall('.//w:CustomAction', ns)}
+        self.assertEqual(actions['ResetOldConfiguration'].get('ExeCommand'), 'installer reset-configuration')
+        self.assertEqual(actions['ResetOldData'].get('ExeCommand'), 'installer reset-data')
+        self.assertEqual(actions['ResetOldConfiguration'].get('Return'), 'check')
+        self.assertEqual(actions['ResetOldData'].get('Return'), 'check')
+        sequence = {
+            action.get('Action'): action.get('Condition')
+            for action in tree.findall('.//w:InstallExecuteSequence/w:Custom', ns)
+        }
+        self.assertIn('&PreserveConfiguration <> 3', sequence['ResetOldConfiguration'])
+        self.assertIn('&PreserveData <> 3', sequence['ResetOldData'])
         path_entry = tree.find('.//w:Environment[@Name="PATH"]', ns)
         self.assertIsNotNone(path_entry)
         self.assertEqual(path_entry.get('Value'), '[INSTALLFOLDER]')

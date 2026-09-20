@@ -146,6 +146,23 @@ impl ProtectedState {
             AtomicFile::create(&self.directory, &entry, bytes).map_err(storage_error)
         }
     }
+    /// Preserve an incompatible account document under a new fixed-name entry
+    /// before removing the active name. A failure may leave both copies, but
+    /// never removes the only copy.
+    pub fn archive(&self, name: &str, archive_name: &str) -> Result<(), StorageError> {
+        if self._lock.is_none() {
+            return Err(StorageError::Unsafe);
+        }
+        use sarmg_client_fs_safety::{AtomicFile, EntryName};
+        let source = EntryName::new(name).map_err(storage_error)?;
+        let archive = EntryName::new(archive_name).map_err(storage_error)?;
+        let bytes = self
+            .directory
+            .read_private_bounded(&source, 2 * 1024 * 1024)
+            .map_err(storage_error)?;
+        AtomicFile::create(&self.directory, &archive, &bytes).map_err(storage_error)?;
+        self.directory.remove_file(&source).map_err(storage_error)
+    }
     pub fn import_bootstrap(&self, path: &Path) -> Result<(), StorageError> {
         use sarmg_client_fs_safety::{EntryName, PrivateDirectory};
         let parent = PrivateDirectory::open_existing(path.parent().ok_or(StorageError::Unsafe)?)

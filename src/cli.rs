@@ -79,12 +79,12 @@ impl ProductErrorCatalog for SunshineErrorCatalog {
             "sunshine_version_unsupported" => {
                 Some("The installed local Sunshine version is unsupported.")
             }
-            "state_schema_unsupported" => {
-                Some("The stored Sunshine Client state belongs to an unsupported schema.")
-            }
-            "state_document_corrupt" => {
-                Some("A protected Sunshine Client state document is malformed.")
-            }
+            "pairing_state_incompatible" => Some(
+                "The stored Sunshine Client account or pairing data cannot be used by this version.",
+            ),
+            "important_state_incompatible" => Some(
+                "Important saved Sunshine execution data is incompatible or unreadable and was preserved.",
+            ),
             "sunshine_resource_conflict" => {
                 Some("Local Sunshine changed while the requested resource was being updated.")
             }
@@ -130,12 +130,13 @@ impl ProductErrorCatalog for SunshineErrorCatalog {
             "sunshine_version_unsupported" | "sunshine_capability_unavailable" => {
                 Some("Upgrade local Sunshine to a supported current version.".into())
             }
-            "state_schema_unsupported" => Some(format!(
-                "Archive the existing state, then run current `{product} setup --interactive` with a new authorization code."
+            "pairing_state_incompatible" => Some(format!(
+                "Create a new Sunshine instance authorization code, then run `{product} pair replace --interactive`; the incompatible account document will be archived."
             )),
-            "state_document_corrupt" => Some(format!(
-                "Run `{product} doctor` and restore or archive the reported state artifact before Setup."
-            )),
+            "important_state_incompatible" => Some(
+                "Do not delete or replace the reported execution journal; restore it with a compatible Client or archive it for operator review."
+                    .into(),
+            ),
             _ => None,
         }
     }
@@ -152,13 +153,19 @@ fn emit_sunshine(command: &str, format: &str, result: &Result<Value>) -> u8 {
 }
 
 fn default_state() -> PathBuf {
-    PathBuf::from(if cfg!(windows) {
-        r"C:\ProgramData\SunshineClient"
-    } else if cfg!(target_os = "macos") {
-        "/Library/Application Support/sunshine-client"
-    } else {
-        "/var/lib/sunshine-client"
-    })
+    #[cfg(windows)]
+    {
+        PathBuf::from(std::env::var_os("ProgramData").unwrap_or_else(|| r"C:\ProgramData".into()))
+            .join("SunshineClient")
+    }
+    #[cfg(target_os = "macos")]
+    {
+        PathBuf::from("/Library/Application Support/sunshine-client")
+    }
+    #[cfg(all(unix, not(target_os = "macos")))]
+    {
+        PathBuf::from("/var/lib/sunshine-client")
+    }
 }
 fn service() -> Service {
     Service {
@@ -185,29 +192,32 @@ fn storage_error(error: impl std::fmt::Debug + std::any::Any) -> Failure {
         }
         crate::storage::StorageError::Unsafe => fail(8, "unsafe_or_corrupt_state"),
         crate::storage::StorageError::DocumentCorrupt { artifact } => {
-            fail(8, "state_document_corrupt").with_detail(format!("artifact={artifact}"))
+            fail(4, "pairing_state_incompatible").with_detail(format!(
+                "artifact={artifact};detected=malformed;supported=sunshine-client-v2;preserved=true"
+            ))
         }
         crate::storage::StorageError::UnsupportedSchema {
             artifact,
             detected,
             supported,
-        } => fail(10, "state_schema_unsupported").with_detail(format!(
-            "artifact={artifact};detected={detected};supported={supported}"
+        } => fail(4, "pairing_state_incompatible").with_detail(format!(
+            "artifact={artifact};detected={detected};supported={supported};preserved=true"
         )),
     }
 }
 fn provision_error(e: ProvisionError) -> Failure {
     match e {
         ProvisionError::Configuration => fail(2, "invalid_configuration"),
-        ProvisionError::StateDocumentCorrupt { artifact } => {
-            fail(8, "state_document_corrupt").with_detail(format!("artifact={artifact}"))
-        }
+        ProvisionError::StateDocumentCorrupt { artifact } => fail(4, "pairing_state_incompatible")
+            .with_detail(format!(
+                "artifact={artifact};detected=malformed;supported=sunshine-client-v2;preserved=true"
+            )),
         ProvisionError::StateSchemaUnsupported {
             artifact,
             detected,
             supported,
-        } => fail(10, "state_schema_unsupported").with_detail(format!(
-            "artifact={artifact};detected={detected};supported={supported}"
+        } => fail(4, "pairing_state_incompatible").with_detail(format!(
+            "artifact={artifact};detected={detected};supported={supported};preserved=true"
         )),
         ProvisionError::Rejected => fail(7, "credential_rejected"),
         ProvisionError::Unavailable | ProvisionError::RateLimited => fail(6, "server_unavailable"),
@@ -240,8 +250,35 @@ fn provision_error(e: ProvisionError) -> Failure {
             }
         },
         ProvisionError::Storage(error) => storage_error(error),
-        ProvisionError::Journal => fail(8, "protected_state_failure"),
+        ProvisionError::Journal => important_state_error("execution-journal"),
     }
+}
+
+fn important_state_error(artifact: &'static str) -> Failure {
+    fail(10, "important_state_incompatible")
+        .with_detail(format!("artifact={artifact};preserved=true"))
+}
+
+fn journal_error(_: crate::engine::JournalError) -> Failure {
+    important_state_error("execution-journal")
+}
+
+fn ensure_execution_journal_compatible(path: &Path) -> Result<()> {
+    let journal = path.join("journal");
+    match std::fs::symlink_metadata(&journal) {
+        Err(error) if error.kind() == std::io::ErrorKind::NotFound => Ok(()),
+        Err(_) => Err(important_state_error("execution-journal")),
+        Ok(_) => crate::journal::inspect(&journal, None)
+            .map(|_| ())
+            .map_err(journal_error),
+    }
+}
+
+fn incompatible_identity_archive_name() -> String {
+    format!(
+        "identity.incompatible-{}.json",
+        uuid::Uuid::new_v4().simple()
+    )
 }
 
 fn sunshine_adapter_error(error: crate::adapter::AdapterError) -> Failure {
@@ -617,30 +654,51 @@ fn execute_pair(args: &Args, path: &Path) -> Result<Value> {
     }
     let _guard = MaintenanceGuard::acquire(path).map_err(storage_error)?;
     let store = ProtectedState::open(&path.join("provisioning")).map_err(storage_error)?;
-    let existing = identity(&store)?;
+    let mut archived_incompatible_identity = false;
+    let existing = match identity(&store) {
+        Ok(existing) => existing,
+        Err(error) if replace && error.code == "pairing_state_incompatible" => {
+            ensure_execution_journal_compatible(path)?;
+            store
+                .archive("identity.json", &incompatible_identity_archive_name())
+                .map_err(storage_error)?;
+            archived_incompatible_identity = true;
+            None
+        }
+        Err(error) => return Err(error),
+    };
     if resume && existing.is_none() {
         return Err(fail(4, "no_pairing_transaction"));
     }
     if let Some(b) = incoming {
         if replace {
-            let mut id = existing.ok_or_else(|| fail(4, "no_existing_binding"))?;
-            if !id.enrolled {
-                return Err(fail(5, "pending_pairing_must_be_resumed"));
+            if archived_incompatible_identity {
+                store
+                    .put(
+                        "bootstrap.json",
+                        &Zeroizing::new(serde_json::to_vec(&b).map_err(storage_error)?),
+                    )
+                    .map_err(storage_error)?;
+            } else {
+                let mut id = existing.ok_or_else(|| fail(4, "no_existing_binding"))?;
+                if !id.enrolled {
+                    return Err(fail(5, "pending_pairing_must_be_resumed"));
+                }
+                if id.config.manager_endpoint != b.manager_endpoint {
+                    return Err(fail(5, "server_replacement_requires_retirement"));
+                }
+                tokio::runtime::Runtime::new()
+                    .map_err(storage_error)?
+                    .block_on(provisioning::validate_replacement(&b, &id.binding))
+                    .map_err(provision_error)?;
+                let mut random = [0u8; 32];
+                rand::rngs::OsRng.fill_bytes(&mut random);
+                id.credential =
+                    Zeroizing::new(random.iter().map(|byte| format!("{byte:02x}")).collect());
+                id.config = b;
+                id.enrolled = false;
+                id.persist(&store).map_err(provision_error)?;
             }
-            if id.config.manager_endpoint != b.manager_endpoint {
-                return Err(fail(5, "server_replacement_requires_retirement"));
-            }
-            tokio::runtime::Runtime::new()
-                .map_err(storage_error)?
-                .block_on(provisioning::validate_replacement(&b, &id.binding))
-                .map_err(provision_error)?;
-            let mut random = [0u8; 32];
-            rand::rngs::OsRng.fill_bytes(&mut random);
-            id.credential =
-                Zeroizing::new(random.iter().map(|byte| format!("{byte:02x}")).collect());
-            id.config = b;
-            id.enrolled = false;
-            id.persist(&store).map_err(provision_error)?;
         } else if let Some(mut id) = existing {
             if id.enrolled || id.config.manager_endpoint != b.manager_endpoint {
                 return Err(fail(5, "binding_replacement_requires_pair_replace"));
@@ -1069,6 +1127,14 @@ fn execute(args: &Args) -> Result<Value> {
         .map(PathBuf::from)
         .unwrap_or_else(default_state);
     match words.as_slice() {
+        #[cfg(windows)]
+        ["installer", action] if ["reset-configuration", "reset-data"].contains(action) => {
+            args.validate_options(&[])?;
+            if path != default_state() {
+                return Err(fail(2, "installer_state_path_mismatch"));
+            }
+            installer_reset(&path, action)
+        }
         ["setup"] => {
             args.validate_options(&[
                 "--interactive",
@@ -1081,11 +1147,11 @@ fn execute(args: &Args) -> Result<Value> {
         }
         ["tasks", "list"] => {
             args.validate_options(&[])?;
-            crate::journal::inspect(&path.join("journal"), None).map_err(storage_error)
+            crate::journal::inspect(&path.join("journal"), None).map_err(journal_error)
         }
         ["tasks", "show", id] => {
             args.validate_options(&[])?;
-            crate::journal::inspect(&path.join("journal"), Some(id)).map_err(storage_error)
+            crate::journal::inspect(&path.join("journal"), Some(id)).map_err(journal_error)
         }
 
         ["logs"] => {
@@ -1342,6 +1408,63 @@ fn execute(args: &Args) -> Result<Value> {
         _ => Err(fail(2, "unknown_command")),
     }
 }
+
+#[cfg(windows)]
+fn installer_reset(path: &Path, action: &str) -> Result<Value> {
+    let (target, category) = match action {
+        "reset-configuration" => (path.join("provisioning"), "configuration"),
+        "reset-data" => (path.join("journal"), "execution data"),
+        _ => return Err(fail(2, "invalid_installer_reset")),
+    };
+    remove_installer_tree(&target).map_err(|error| {
+        fail(8, "unsafe_or_corrupt_state")
+            .with_detail(format!("artifact={category};preserved=true;error={error}"))
+    })?;
+    Ok(json!({"removed":category,"path":target}))
+}
+
+#[cfg(any(windows, test))]
+fn remove_installer_tree(path: &Path) -> std::io::Result<()> {
+    let metadata = match std::fs::symlink_metadata(path) {
+        Ok(metadata) => metadata,
+        Err(error) if error.kind() == std::io::ErrorKind::NotFound => return Ok(()),
+        Err(error) => return Err(error),
+    };
+    if !metadata.is_dir() || metadata.file_type().is_symlink() {
+        return Err(std::io::Error::other(
+            "installer target is not a regular non-link directory",
+        ));
+    }
+    let mut pending = vec![path.to_path_buf()];
+    let mut entries = 0usize;
+    while let Some(directory) = pending.pop() {
+        for entry in std::fs::read_dir(&directory)? {
+            let entry = entry?;
+            entries = entries
+                .checked_add(1)
+                .ok_or_else(|| std::io::Error::other("installer state entry count overflow"))?;
+            if entries > 100_000 {
+                return Err(std::io::Error::other(
+                    "installer state exceeds the 100000-entry safety limit",
+                ));
+            }
+            let metadata = std::fs::symlink_metadata(entry.path())?;
+            if metadata.file_type().is_symlink() {
+                return Err(std::io::Error::other(
+                    "installer state contains a symbolic link or junction",
+                ));
+            }
+            if metadata.is_dir() {
+                pending.push(entry.path());
+            } else if !metadata.is_file() {
+                return Err(std::io::Error::other(
+                    "installer state contains an unsupported file type",
+                ));
+            }
+        }
+    }
+    std::fs::remove_dir_all(path)
+}
 pub fn run(path: &Path) -> Result<()> {
     let rt = tokio::runtime::Runtime::new().map_err(storage_error)?;
     rt.block_on(async {
@@ -1454,5 +1577,58 @@ mod setup_tests {
             serde_json::from_str(include_str!("../compatibility.json")).unwrap();
         assert_eq!(manifest["sunshine_manager_protocol"], 2);
         assert_eq!(sunshine_client_protocol::PROTOCOL, "sunshine-management/2");
+    }
+
+    #[test]
+    fn incompatible_account_and_important_data_have_distinct_recovery_contracts() {
+        let account = provision_error(ProvisionError::StateSchemaUnsupported {
+            artifact: "identity",
+            detected: "sunshine-client-v1",
+            supported: "sunshine-client-v2",
+        });
+        assert_eq!(account.exit, 4);
+        assert_eq!(account.code, "pairing_state_incompatible");
+        assert!(
+            SunshineErrorCatalog
+                .next_step("sunshine-client", &account)
+                .unwrap()
+                .contains("pair replace --interactive")
+        );
+
+        let important = important_state_error("execution-journal");
+        assert_eq!(important.exit, 10);
+        assert_eq!(important.code, "important_state_incompatible");
+        assert_eq!(
+            important.detail.as_deref(),
+            Some("artifact=execution-journal;preserved=true")
+        );
+        assert!(
+            SunshineErrorCatalog
+                .next_step("sunshine-client", &important)
+                .unwrap()
+                .contains("Do not delete")
+        );
+    }
+
+    #[test]
+    fn installer_cleanup_accepts_unknown_regular_old_data_but_rejects_links() {
+        let directory = tempfile::tempdir().unwrap();
+        let removable = directory.path().join("old-state");
+        std::fs::create_dir(&removable).unwrap();
+        std::fs::write(removable.join("unknown-v1.bin"), b"old bytes").unwrap();
+        remove_installer_tree(&removable).unwrap();
+        assert!(!removable.exists());
+
+        #[cfg(unix)]
+        {
+            use std::os::unix::fs::symlink;
+            let unsafe_tree = directory.path().join("unsafe-state");
+            std::fs::create_dir(&unsafe_tree).unwrap();
+            let outside = directory.path().join("outside");
+            std::fs::write(&outside, b"must survive").unwrap();
+            symlink(&outside, unsafe_tree.join("linked")).unwrap();
+            assert!(remove_installer_tree(&unsafe_tree).is_err());
+            assert_eq!(std::fs::read(outside).unwrap(), b"must survive");
+        }
     }
 }

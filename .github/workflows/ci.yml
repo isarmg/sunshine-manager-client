@@ -102,6 +102,31 @@ jobs:
           if ($env:GITHUB_REF_TYPE -eq 'tag') { $tagArgs += '--require-tag' }
           python scripts/package-client.py --output "$env:RUNNER_TEMP\client-output" @tagArgs
           exit $LASTEXITCODE
+      - name: Verify MSI custom path and explicit state cleanup choices
+        shell: pwsh
+        run: |
+          $installers = @(Get-ChildItem -LiteralPath "$env:RUNNER_TEMP\client-output" -Filter '*.msi' -File)
+          if ($installers.Count -ne 1) { throw 'Expected one Windows MSI' }
+          $customRoot = Join-Path $env:RUNNER_TEMP 'SunshineClientCustom'
+          $stateRoot = Join-Path $env:ProgramData 'SunshineClient'
+          New-Item -ItemType Directory -Force -Path (Join-Path $stateRoot 'provisioning') | Out-Null
+          New-Item -ItemType Directory -Force -Path (Join-Path $stateRoot 'journal') | Out-Null
+          Set-Content -LiteralPath (Join-Path $stateRoot 'provisioning\unknown-v1.bin') -Value 'old configuration' -NoNewline
+          Set-Content -LiteralPath (Join-Path $stateRoot 'journal\unknown-v1.bin') -Value 'old execution data' -NoNewline
+          $install = Start-Process msiexec.exe -ArgumentList "/i `"$($installers[0].FullName)`" INSTALLFOLDER=`"$customRoot`" ADDLOCAL=Complete /qn /norestart" -Wait -PassThru
+          if ($install.ExitCode -notin @(0, 3010)) { throw "Custom-path MSI install failed with $($install.ExitCode)." }
+          & (Join-Path $customRoot 'sunshine-client.exe') --version
+          if ($LASTEXITCODE) { throw 'Custom-path executable verification failed.' }
+          if ((Test-Path (Join-Path $stateRoot 'provisioning')) -or (Test-Path (Join-Path $stateRoot 'journal'))) {
+            throw 'Deselected configuration or execution data was retained.'
+          }
+          $uninstall = Start-Process msiexec.exe -ArgumentList "/x `"$($installers[0].FullName)`" /qn /norestart" -Wait -PassThru
+          if ($uninstall.ExitCode -notin @(0, 3010)) { throw "Custom-path MSI uninstall failed with $($uninstall.ExitCode)." }
+          if ((Test-Path $customRoot) -or (Get-Service SunshineClient -ErrorAction SilentlyContinue)) {
+            throw 'Custom-path MSI uninstall left program files or service registration.'
+          }
+          if (Test-Path $stateRoot) { Remove-Item -LiteralPath $stateRoot -Force }
+          Write-Host 'Sunshine MSI custom path, cleanup choices and explicit result checks passed.'
       - name: Verify extracted package and actual Windows Service install lifecycle
         shell: pwsh
         run: |

@@ -10,10 +10,41 @@ fn protected_state_persists_and_excludes_other_processes() {
     assert!(store.read("identity.json").unwrap().is_none());
     store.put("identity.json", b"first").unwrap();
     store.put("identity.json", b"second").unwrap();
+    store
+        .archive("identity.json", "identity.incompatible-test.json")
+        .unwrap();
+    assert!(store.read("identity.json").unwrap().is_none());
+    assert_eq!(
+        store
+            .read("identity.incompatible-test.json")
+            .unwrap()
+            .unwrap(),
+        b"second"
+    );
+    store.put("identity.json", b"replacement").unwrap();
+    assert!(
+        store
+            .archive("identity.json", "identity.incompatible-test.json")
+            .is_err()
+    );
+    assert_eq!(
+        store.read("identity.json").unwrap().unwrap(),
+        b"replacement"
+    );
     assert!(store.put("../escape", b"x").is_err());
     drop(store);
     let reopened = ProtectedState::open(&path).unwrap();
-    assert_eq!(reopened.read("identity.json").unwrap().unwrap(), b"second");
+    assert_eq!(
+        reopened.read("identity.json").unwrap().unwrap(),
+        b"replacement"
+    );
+    assert_eq!(
+        reopened
+            .read("identity.incompatible-test.json")
+            .unwrap()
+            .unwrap(),
+        b"second"
+    );
 }
 #[cfg(windows)]
 #[test]

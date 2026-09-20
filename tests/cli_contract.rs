@@ -116,6 +116,61 @@ fn credentials_update_preserves_binding_credential_and_execution_journal() {
     assert_eq!(call(&state, &["status"], None).0, 0);
     drop(guard);
 }
+
+#[test]
+fn legacy_pairing_state_is_identified_and_bad_journal_blocks_replacement() {
+    let temp = tempfile::tempdir_in(std::env::temp_dir().canonicalize().unwrap()).unwrap();
+    let state = temp.path().join("state");
+    let _root = sunshine_client::storage::prepare_root(&state).unwrap();
+    let store = ProtectedState::open(&state.join("provisioning")).unwrap();
+    let legacy = json!({
+        "manager_endpoint": "wss://manager.example/sunshine-client/v1/connect",
+        "enrollment_token": "a".repeat(64),
+        "sunshine_endpoint": "https://127.0.0.1:47990/",
+        "sunshine_username": "old",
+        "sunshine_password": "old-secret",
+        "restart_allowed": true
+    });
+    let legacy_bytes = serde_json::to_vec(&legacy).unwrap();
+    store.put("identity.json", &legacy_bytes).unwrap();
+    drop(store);
+
+    let status = call(&state, &["pair", "status"], None);
+    assert_eq!(status.0, 4, "{}", status.1);
+    assert_eq!(status.1["error"]["code"], "pairing_state_incompatible");
+
+    fs::create_dir(state.join("journal")).unwrap();
+    fs::set_permissions(state.join("journal"), fs::Permissions::from_mode(0o700)).unwrap();
+    private_file(
+        &state.join("journal/op_00000000-0000-4000-8000-000000000001.json"),
+        b"not-json-important-data",
+    );
+    let replacement = json!({
+        "server": "https://manager.example/",
+        "authorization_code": "b".repeat(64),
+        "sunshine_endpoint": "https://127.0.0.1:47990/",
+        "sunshine_username": "new",
+        "sunshine_password": "new-secret"
+    });
+    let result = call(
+        &state,
+        &["pair", "replace", "--input-stdin"],
+        Some(&replacement.to_string()),
+    );
+    assert_eq!(result.0, 10, "{}", result.1);
+    assert_eq!(result.1["error"]["code"], "important_state_incompatible");
+    assert_eq!(
+        result.1["error"]["detail"],
+        "artifact=execution-journal;preserved=true"
+    );
+
+    let store = ProtectedState::open_readonly(&state.join("provisioning")).unwrap();
+    assert_eq!(store.read("identity.json").unwrap().unwrap(), legacy_bytes);
+    assert_eq!(
+        fs::read(state.join("journal/op_00000000-0000-4000-8000-000000000001.json")).unwrap(),
+        b"not-json-important-data"
+    );
+}
 #[test]
 fn configuration_revision_conflict_cannot_change_settings() {
     let temp = tempfile::tempdir_in(std::env::temp_dir().canonicalize().unwrap()).unwrap();

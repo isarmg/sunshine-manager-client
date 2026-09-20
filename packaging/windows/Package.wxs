@@ -5,16 +5,17 @@
     <Property Id="WINDOWSBUILD"><RegistrySearch Id="WindowsBuild" Root="HKLM" Key="SOFTWARE\Microsoft\Windows NT\CurrentVersion" Name="CurrentBuildNumber" Type="raw" Bitness="always64" /></Property>
     <Launch Condition="Installed OR (VersionNT64 AND WINDOWSBUILD &gt;= 22000)" Message="Sunshine Client requires Windows 11 x64 (build 22000) or newer." />
     <Property Id="EXISTINGCLIENTSERVICE"><RegistrySearch Id="ExistingService" Root="HKLM" Key="SYSTEM\CurrentControlSet\Services\SunshineClient" Name="ImagePath" Type="raw" Bitness="always64" /></Property>
-    <SetProperty Id="EXPECTEDCLIENTSERVICE" Value="&quot;[ProgramFiles64Folder]SunshineClient\sunshine-client.exe&quot; --windows-service --state &quot;[CommonAppDataFolder]SunshineClient&quot;" Before="LaunchConditions" Sequence="both" />
-    <Launch Condition="Installed OR NOT EXISTINGCLIENTSERVICE OR EXISTINGCLIENTSERVICE ~= EXPECTEDCLIENTSERVICE" Message="The SunshineClient service points outside this installation. Inspect its ImagePath before retrying." />
+    <Launch Condition="Installed OR WIX_UPGRADE_DETECTED OR NOT EXISTINGCLIENTSERVICE" Message="An unmanaged SunshineClient service already exists. Remove or rename that service before installing." />
     <Property Id="ARPURLINFOABOUT" Value="https://github.com/isarmg/sunshine-manager-client" />
-    <ui:WixUI Id="WixUI_Minimal" />
+    <Property Id="ARPNOMODIFY" Value="1" />
+    <ui:WixUI Id="WixUI_FeatureTree" InstallDirectory="INSTALLFOLDER" />
     <WixVariable Id="WixUILicenseRtf" Value="$(var.LicenseRtf)" />
     <StandardDirectory Id="ProgramFiles64Folder">
       <Directory Id="INSTALLFOLDER" Name="SunshineClient">
         <Component Id="ClientService" Guid="4C3D6380-EB5B-45B8-B9F7-77B28CD14E82" Bitness="always64">
           <File Id="ClientExe" Source="$(var.ClientExe)" Name="sunshine-client.exe" KeyPath="yes" />
           <Environment Id="SunshineClientMachinePath" Name="PATH" Value="[INSTALLFOLDER]" Action="set" Part="last" Permanent="no" System="yes" />
+          <RegistryValue Root="HKLM" Key="Software\sarmg\Sunshine Client" Name="InstallLocation" Type="string" Value="[INSTALLFOLDER]" />
           <RemoveRegistryValue Id="RemoveLegacyTrayRun" Root="HKLM" Key="Software\Microsoft\Windows\CurrentVersion\Run" Name="SunshineClientTray" />
           <RemoveFile Id="RemoveLegacyTrayFile" Name="sunshine-client-tray.exe" On="install" />
           <RemoveFile Id="RemoveLegacyTrayShortcut" Directory="ProgramMenuFolder" Name="Sunshine Client.lnk" On="install" />
@@ -24,9 +25,32 @@
         </Component>
       </Directory>
     </StandardDirectory>
-    <StandardDirectory Id="CommonAppDataFolder" />
+    <StandardDirectory Id="CommonAppDataFolder">
+      <Directory Id="SunshineStateDirectory" Name="SunshineClient">
+        <Component Id="PreserveConfigurationSelection" Guid="F124AD7F-A435-4C44-A181-C7FE26DC0268" Bitness="always64">
+          <RegistryValue Root="HKLM" Key="Software\sarmg\Sunshine Client" Name="PreserveConfiguration" Type="integer" Value="1" KeyPath="yes" />
+        </Component>
+        <Component Id="PreserveDataSelection" Guid="1AC45A4E-B558-47F6-96D4-5CA0BA55F90B" Bitness="always64">
+          <RegistryValue Root="HKLM" Key="Software\sarmg\Sunshine Client" Name="PreserveData" Type="integer" Value="1" KeyPath="yes" />
+        </Component>
+      </Directory>
+    </StandardDirectory>
     <StandardDirectory Id="ProgramMenuFolder" />
-    <Feature Id="Complete" Title="Sunshine Client" Level="1"><ComponentRef Id="ClientService" /></Feature>
+    <Feature Id="Complete" Title="Sunshine Client program" Description="Install the Sunshine management client and service." Level="1" AllowAbsent="no" Display="expand">
+      <ComponentRef Id="ClientService" />
+      <Feature Id="PreserveConfiguration" Title="Retain existing configuration" Description="Keep Manager pairing, Sunshine settings and credentials. Deselect to remove them and configure/pair again." Level="1" AllowAbsent="yes">
+        <ComponentRef Id="PreserveConfigurationSelection" />
+      </Feature>
+      <Feature Id="PreserveData" Title="Retain existing execution data" Description="Keep the durable execution journal. Deselect to validate and permanently remove it." Level="1" AllowAbsent="yes">
+        <ComponentRef Id="PreserveDataSelection" />
+      </Feature>
+    </Feature>
+    <CustomAction Id="ResetOldConfiguration" FileRef="ClientExe" ExeCommand="installer reset-configuration" Execute="deferred" Impersonate="no" Return="check" />
+    <CustomAction Id="ResetOldData" FileRef="ClientExe" ExeCommand="installer reset-data" Execute="deferred" Impersonate="no" Return="check" />
+    <InstallExecuteSequence>
+      <Custom Action="ResetOldConfiguration" After="InstallFiles" Condition="NOT Installed AND &amp;PreserveConfiguration &lt;&gt; 3" />
+      <Custom Action="ResetOldData" After="ResetOldConfiguration" Condition="NOT Installed AND &amp;PreserveData &lt;&gt; 3" />
+    </InstallExecuteSequence>
     <!-- Pairing is an explicit post-install CLI action; MSI never opens an interactive wizard. -->
   </Package>
 </Wix>

@@ -1,6 +1,6 @@
 # Sunshine Client 配置指南
 
-本文适用于 `sunshine-client` `0.2.3`。Client 必须先连接本机 Sunshine，再与 Sunshine Manager 配对；以下命令不会安装 Sunshine。
+本文适用于 `sunshine-client` `0.2.5`。Client 必须先连接本机 Sunshine，再与 Sunshine Manager 配对；以下命令不会安装 Sunshine。
 
 ## 1. 前置条件与状态目录
 
@@ -25,7 +25,8 @@ sudo sunshine-client service stop
 Windows 请在管理员 PowerShell 中去掉 `sudo`；PATH 未刷新时使用：
 
 ```powershell
-$Client = "$env:ProgramFiles\SunshineClient\sunshine-client.exe"
+$InstallRoot = (Get-ItemProperty 'HKLM:\Software\sarmg\Sunshine Client').InstallLocation
+$Client = Join-Path $InstallRoot 'sunshine-client.exe'
 & $Client version --format json
 & $Client service stop
 ```
@@ -148,6 +149,8 @@ sudo sunshine-client service start
 ```
 
 `pair replace` 保留本机安装身份和执行记录。切换到另一台 Manager 前，应先在旧 Manager 退役设备并按运维策略归档状态。
+
+若旧版本账户文档返回 `pairing_state_incompatible`，使用同一条 `pair replace` 命令。Client 会在确认执行日志完整后归档旧账户文档并创建当前身份；如果执行日志不兼容或不可读，则返回 `important_state_incompatible`，不会删除、改写或绕过这些重要记录。
 
 ## 6. 启动和验证
 

@@ -382,6 +382,34 @@ impl ProtectedState {
         self.connection.execute("INSERT INTO facts(name,value) VALUES(?,?) ON CONFLICT(name) DO UPDATE SET value=excluded.value",rusqlite::params![name,bytes]).map_err(storage_error)?;
         Ok(())
     }
+    pub fn archive(&self, name: &str, archive_name: &str) -> Result<(), StorageError> {
+        if self._lock.is_none() {
+            return Err(StorageError::Unsafe);
+        }
+        validate_name(name)?;
+        validate_name(archive_name)?;
+        let transaction = self
+            .connection
+            .unchecked_transaction()
+            .map_err(storage_error)?;
+        let copied = transaction
+            .execute(
+                "INSERT INTO facts(name,value) SELECT ?,value FROM facts WHERE name=?",
+                rusqlite::params![archive_name, name],
+            )
+            .map_err(storage_error)?;
+        if copied != 1 {
+            return Err(StorageError::Unsafe);
+        }
+        if transaction
+            .execute("DELETE FROM facts WHERE name=?", [name])
+            .map_err(storage_error)?
+            != 1
+        {
+            return Err(StorageError::Unsafe);
+        }
+        transaction.commit().map_err(storage_error)
+    }
     pub fn import_bootstrap(&self, path: &Path) -> Result<(), StorageError> {
         // Hold every ancestor and verify the existing input directory (never create missing input).
         if !path.parent().ok_or(StorageError::Unsafe)?.is_dir() {
