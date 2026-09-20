@@ -1,6 +1,6 @@
 # Sunshine Client
 
-`sunshine-client` `0.2.5` 是 Sunshine Manager 的本机管理代理。它主动连接 Manager，读取和修改本机 Sunshine 配置、应用、日志与维护状态，并通过固定的平台服务适配器控制已安装的 Sunshine 服务；它不代理媒体流，也不安装 Sunshine。
+`sunshine-client` `0.2.6` 是 Sunshine Manager 的本机管理代理。它主动连接 Manager，读取和修改本机 Sunshine 配置、应用、日志与维护状态，并通过固定的平台服务适配器控制已安装的 Sunshine 服务；它不代理媒体流，也不安装 Sunshine。
 
 当前支持 Windows x64、Ubuntu 24.04 x64 和 macOS Apple Silicon，固定适配 Sunshine `v2026.914.233613`。安装包签名与实机验收边界以对应 Release 为准。
 

@@ -29,9 +29,21 @@ if [ -e "$plist" ] || [ -L "$plist" ]; then
   /usr/bin/plutil -lint "$plist" >/dev/null
   /usr/libexec/PlistBuddy -c 'Print :ProgramArguments:0' "$plist" | /usr/bin/grep -qx /usr/local/libexec/sunshine-client || exit 8
 fi
-[ ! -e "$marker" ] && [ ! -L "$marker" ] || { echo 'stale launchd transaction marker exists.' >&2; exit 8; }
+if [ -e "$marker" ] || [ -L "$marker" ]; then
+  [ -f "$marker" ] && [ ! -L "$marker" ] \
+    && [ "$(stat -f %u "$marker")" = 0 ] \
+    && [ "$(stat -f %Lp "$marker")" = 600 ] \
+    && [ "$(stat -f %l "$marker")" = 1 ] || {
+      echo 'Unsafe launchd transaction marker exists.' >&2
+      exit 8
+    }
+fi
 
 if launchctl print system/org.sarmg.sunshine-client >/dev/null 2>&1; then
   launchctl bootout system/org.sarmg.sunshine-client
-  (umask 077; set -C; : > "$marker")
+  # A valid marker can remain after a previous package transaction stopped the
+  # service and then failed. Preserve it so a retry still restores launchd.
+  if [ ! -e "$marker" ]; then
+    (umask 077; set -C; : > "$marker")
+  fi
 fi

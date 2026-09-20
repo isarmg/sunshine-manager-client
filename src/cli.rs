@@ -91,6 +91,9 @@ impl ProductErrorCatalog for SunshineErrorCatalog {
             "sunshine_capability_unavailable" => {
                 Some("Local Sunshine does not expose the requested management capability.")
             }
+            "service_state_unconfirmed" => Some(
+                "The registered Sunshine Client service did not remain running; it may have exited during startup.",
+            ),
             _ => None,
         }
     }
@@ -130,6 +133,9 @@ impl ProductErrorCatalog for SunshineErrorCatalog {
             "sunshine_version_unsupported" | "sunshine_capability_unavailable" => {
                 Some("Upgrade local Sunshine to a supported current version.".into())
             }
+            "service_state_unconfirmed" => Some(format!(
+                "Run `sudo {product} logs --tail 100`, then `sudo {product} service status --format json` to inspect the startup failure."
+            )),
             "pairing_state_incompatible" => Some(format!(
                 "Create a new Sunshine instance authorization code, then run `{product} pair replace --interactive`; the incompatible account document will be archived."
             )),
@@ -1699,7 +1705,7 @@ mod setup_tests {
     #[test]
     fn installer_preparation_archives_only_incompatible_account_documents() {
         let directory = tempfile::tempdir().unwrap();
-        let root = directory.path().join("client");
+        let root = directory.path().canonicalize().unwrap().join("client");
         crate::storage::prepare_root(&root).unwrap();
         let provisioning = root.join("provisioning");
         {
@@ -1727,7 +1733,7 @@ mod setup_tests {
     #[test]
     fn installer_preparation_preserves_account_when_important_data_is_invalid() {
         let directory = tempfile::tempdir().unwrap();
-        let root = directory.path().join("client");
+        let root = directory.path().canonicalize().unwrap().join("client");
         crate::storage::prepare_root(&root).unwrap();
         let provisioning = root.join("provisioning");
         {
@@ -1750,7 +1756,7 @@ mod setup_tests {
     #[test]
     fn installer_preparation_leaves_current_account_documents_unchanged() {
         let directory = tempfile::tempdir().unwrap();
-        let root = directory.path().join("client");
+        let root = directory.path().canonicalize().unwrap().join("client");
         crate::storage::prepare_root(&root).unwrap();
         let provisioning = root.join("provisioning");
         let current = br#"{"manager_endpoint":"wss://manager.example/sunshine-client/v2/connect","enrollment_token":"token","sunshine_endpoint":"https://127.0.0.1:47990/","sunshine_username":"sunshine","sunshine_password":"password"}"#;

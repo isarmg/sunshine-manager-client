@@ -1,4 +1,7 @@
+#[cfg(unix)]
+use std::os::unix::fs::MetadataExt;
 use sunshine_client::storage::{ProtectedState, prepare_root};
+
 #[test]
 fn protected_state_persists_and_excludes_other_processes() {
     let temporary = tempfile::tempdir().unwrap();
@@ -6,6 +9,12 @@ fn protected_state_persists_and_excludes_other_processes() {
     let _root = prepare_root(&root).unwrap();
     let path = root.join("state");
     let store = ProtectedState::open(&path).unwrap();
+    #[cfg(unix)]
+    assert_eq!(
+        std::fs::symlink_metadata(&path).unwrap().uid(),
+        std::fs::symlink_metadata(&root).unwrap().uid(),
+        "a protected child must inherit its held parent's owner"
+    );
     assert!(ProtectedState::open(&path).is_err());
     assert!(store.read("identity.json").unwrap().is_none());
     store.put("identity.json", b"first").unwrap();

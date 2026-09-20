@@ -12,7 +12,7 @@ import unittest
 
 ROOT = Path(__file__).resolve().parents[2]
 SHIM = r'''#!/usr/bin/env python3
-import os, sys, json, subprocess
+import os, sys, json, shutil, subprocess
 from pathlib import Path
 name = Path(sys.argv[0]).name
 args = sys.argv[1:]
@@ -51,7 +51,9 @@ if name == "install":
   if arg in ("-o", "-g"): next(it)
   else: cleaned.append(arg)
  args = cleaned
-sys.exit(subprocess.run(["/usr/bin/" + name] + args).returncode)
+real = shutil.which(name, path="/usr/bin:/bin:/usr/sbin:/sbin")
+if real is None: sys.exit(127)
+sys.exit(subprocess.run([real] + args).returncode)
 '''
 
 

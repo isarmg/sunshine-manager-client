@@ -91,7 +91,18 @@ pub struct ProtectedState {
 impl ProtectedState {
     pub fn open(path: &Path) -> Result<Self, StorageError> {
         use sarmg_client_fs_safety::{AdvisoryLock, EntryName, PrivateDirectory};
-        let directory = PrivateDirectory::create_for_administration(path).map_err(storage_error)?;
+        let parent_path = path.parent().ok_or(StorageError::Unsafe)?;
+        let child_name = path.file_name().ok_or(StorageError::Unsafe)?;
+        let parent =
+            PrivateDirectory::open_for_administration(parent_path).map_err(storage_error)?;
+        // Setup normally runs as root while the installed service state root is
+        // owned by the dedicated service account. Creating the child through
+        // the held parent inherits that service owner; creating the full path
+        // administratively would leave a root-owned 0700 directory that the
+        // service cannot open after Setup completes.
+        let directory = parent
+            .create_child(&EntryName::new(child_name).map_err(storage_error)?)
+            .map_err(storage_error)?;
         let lock = AdvisoryLock::acquire(
             &directory,
             &EntryName::new("provisioning.lock")

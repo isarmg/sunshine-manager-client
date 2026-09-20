@@ -78,6 +78,60 @@ else
   chmod 0700 "$state"
 fi
 
+# Client 0.2.5 and earlier could create this child as root during an
+# administrator-run Setup even though the state root belongs to the service
+# account. Validate the complete private subtree before repairing only this
+# known ownership defect. Never traverse links or accept foreign owners,
+# special files, public modes or multiply-linked files.
+provisioning="$state/provisioning"
+if [ -e "$provisioning" ] || [ -L "$provisioning" ]; then
+  [ -d "$provisioning" ] && [ ! -L "$provisioning" ] || {
+    echo 'Unsafe Sunshine Client provisioning state type; preserving it unchanged.' >&2
+    exit 8
+  }
+  [ -z "$(find "$provisioning" -type l -print -quit)" ] || {
+    echo 'Unsafe link in Sunshine Client provisioning state; preserving it unchanged.' >&2
+    exit 8
+  }
+  [ -z "$(find "$provisioning" ! -type d ! -type f -print -quit)" ] || {
+    echo 'Unsupported entry in Sunshine Client provisioning state; preserving it unchanged.' >&2
+    exit 8
+  }
+  find "$provisioning" -type d -exec sh -c '
+    service_uid=$1
+    service_gid=$2
+    shift 2
+    for entry do
+      owner=$(stat -f %u "$entry")
+      group=$(stat -f %g "$entry")
+      mode=$(stat -f %Lp "$entry")
+      { [ "$owner" = 0 ] || [ "$owner:$group" = "$service_uid:$service_gid" ]; } || exit 1
+      [ "$mode" = 700 ] || exit 1
+    done
+  ' sh "$service_uid" "$service_gid" {} + || {
+    echo 'Unsafe directory metadata in Sunshine Client provisioning state; preserving it unchanged.' >&2
+    exit 8
+  }
+  find "$provisioning" -type f -exec sh -c '
+    service_uid=$1
+    service_gid=$2
+    shift 2
+    for entry do
+      owner=$(stat -f %u "$entry")
+      group=$(stat -f %g "$entry")
+      mode=$(stat -f %Lp "$entry")
+      links=$(stat -f %l "$entry")
+      { [ "$owner" = 0 ] || [ "$owner:$group" = "$service_uid:$service_gid" ]; } || exit 1
+      [ "$mode" = 600 ] && [ "$links" = 1 ] || exit 1
+    done
+  ' sh "$service_uid" "$service_gid" {} + || {
+    echo 'Unsafe file metadata in Sunshine Client provisioning state; preserving it unchanged.' >&2
+    exit 8
+  }
+  find "$provisioning" -type f -exec chown "$account:$group" {} +
+  find "$provisioning" -depth -type d -exec chown "$account:$group" {} +
+fi
+
 [ -f "$binary" ] && [ ! -L "$binary" ] || exit 8
 [ -L "$link" ] && [ "$(readlink "$link")" = /usr/local/libexec/sunshine-client ] || exit 8
 [ -f "$plist" ] && [ ! -L "$plist" ] || exit 8
@@ -109,7 +163,10 @@ else
 fi
 
 if [ -e "$marker" ] || [ -L "$marker" ]; then
-  [ -f "$marker" ] && [ ! -L "$marker" ] || exit 8
+  [ -f "$marker" ] && [ ! -L "$marker" ] \
+    && [ "$(stat -f %u "$marker")" = 0 ] \
+    && [ "$(stat -f %Lp "$marker")" = 600 ] \
+    && [ "$(stat -f %l "$marker")" = 1 ] || exit 8
   launchctl bootstrap system "$plist"
   rm -f "$marker"
 fi
