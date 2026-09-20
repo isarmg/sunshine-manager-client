@@ -1,5 +1,6 @@
 //! Linux durable execution facts, using Foundation's held-directory and atomic-file primitives.
-//! Windows must not use the Foundation 0.6.0 portable fallback (known ACL/handle release blocker).
+//! Windows uses its native SQLite journal instead of the Unix file backend,
+//! whose ownership and handle guarantees do not model Windows service ACLs.
 use crate::engine::{ExecutionRecord, Journal, JournalError};
 use sarmg_client_fs_safety::{
     AdvisoryLock, AtomicFile, EntryName, InventoryLimits, PrivateDirectory,

@@ -1,4 +1,4 @@
-//! Local provisioning storage, never an Client command surface.
+//! Local provisioning storage, never a Client command surface.
 #[cfg(any(target_os = "linux", target_os = "macos"))]
 use std::path::Path;
 

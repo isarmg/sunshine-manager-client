@@ -1,6 +1,6 @@
-# 各平台安装、配置与覆盖升级
+# 各平台安装与覆盖升级
 
-适用于 0.2.2。Client 是管理代理；需要先安装 Sunshine 并在其 Web UI 设置用户名、密码。Manager 地址、Manager 配对码、Sunshine 本机地址和 Sunshine 管理凭据是不同的输入。每个平台只发布一个原生安装包，安装器检查平台/架构/权限、注册服务，然后由 `setup` 完成配置。
+适用于 0.2.2。Client 是管理代理；需要先安装 Sunshine 并在其 Web UI 设置用户名、密码。Manager 地址、Manager 配对码、Sunshine 本机地址和 Sunshine 管理凭据是不同的输入。每个平台只发布一个原生安装包，安装器检查平台、架构、权限并注册服务。安装后的逐步配置和配对命令见[完整配置指南](configuration.md)。
 
 ## Windows 11 x64
 
