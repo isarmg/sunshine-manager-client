@@ -1574,6 +1574,22 @@ fn validate_settings(settings: &Settings) -> Result<()> {
 mod setup_tests {
     use super::*;
 
+    fn installer_test_root(directory: &tempfile::TempDir) -> PathBuf {
+        #[cfg(windows)]
+        {
+            // canonicalize() produces a \\?\-prefixed VerbatimDisk path on
+            // Windows. Production storage deliberately accepts only a normal
+            // local drive path, so keep tempfile's absolute DOS path here.
+            directory.path().join("client")
+        }
+        #[cfg(unix)]
+        {
+            // macOS temp paths can traverse /var -> /private/var; resolve that
+            // ancestor before the no-symlink protected-store checks run.
+            directory.path().canonicalize().unwrap().join("client")
+        }
+    }
+
     #[test]
     fn sunshine_owns_manager_and_local_api_error_presentation() {
         assert_eq!(
@@ -1705,7 +1721,7 @@ mod setup_tests {
     #[test]
     fn installer_preparation_archives_only_incompatible_account_documents() {
         let directory = tempfile::tempdir().unwrap();
-        let root = directory.path().canonicalize().unwrap().join("client");
+        let root = installer_test_root(&directory);
         crate::storage::prepare_root(&root).unwrap();
         let provisioning = root.join("provisioning");
         {
@@ -1733,7 +1749,7 @@ mod setup_tests {
     #[test]
     fn installer_preparation_preserves_account_when_important_data_is_invalid() {
         let directory = tempfile::tempdir().unwrap();
-        let root = directory.path().canonicalize().unwrap().join("client");
+        let root = installer_test_root(&directory);
         crate::storage::prepare_root(&root).unwrap();
         let provisioning = root.join("provisioning");
         {
@@ -1756,7 +1772,7 @@ mod setup_tests {
     #[test]
     fn installer_preparation_leaves_current_account_documents_unchanged() {
         let directory = tempfile::tempdir().unwrap();
-        let root = directory.path().canonicalize().unwrap().join("client");
+        let root = installer_test_root(&directory);
         crate::storage::prepare_root(&root).unwrap();
         let provisioning = root.join("provisioning");
         let current = br#"{"manager_endpoint":"wss://manager.example/sunshine-client/v2/connect","enrollment_token":"token","sunshine_endpoint":"https://127.0.0.1:47990/","sunshine_username":"sunshine","sunshine_password":"password"}"#;
