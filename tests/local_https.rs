@@ -1,4 +1,4 @@
-//! Real certificate validation and HTTP behavior against a local protocol fixture, NOT Sunshine acceptance.
+//! Real HTTPS and HTTP behavior against a local protocol fixture, NOT Sunshine acceptance.
 use std::{
     path::Path,
     process::Command as ProcessCommand,
@@ -236,38 +236,22 @@ fn config(qp: &str) -> serde_json::Value {
     })
 }
 
-fn adapter(fixture: &Fixture, ca: &[u8]) -> LocalSunshine {
+fn adapter(fixture: &Fixture) -> LocalSunshine {
     LocalSunshine::new(
         &fixture.endpoint,
         "fixture",
         Zeroizing::new("local-test-password".into()),
-        ca,
     )
     .unwrap()
 }
 
 #[tokio::test]
 #[ignore = "requires loopback sockets and openssl"]
-async fn pinned_builtin_certificate_rejects_mismatch_and_never_follows_redirects() {
+async fn self_signed_loopback_https_is_accepted_and_redirects_are_never_followed() {
     let temporary = tempfile::tempdir().unwrap();
     certificates(temporary.path());
-    let sunshine_certificate = std::fs::read(temporary.path().join("sunshine.pem")).unwrap();
-    let wrong = std::fs::read(temporary.path().join("wrong.pem")).unwrap();
     let fixture = serve(temporary.path(), vec![response(config("28"))]).await;
-    assert!(matches!(
-        adapter(&fixture, &wrong).read().await,
-        Err(AdapterError::CertificateMismatch)
-    ));
-    assert!(
-        fixture.requests.lock().unwrap().is_empty(),
-        "credentials must not leave on failed TLS"
-    );
-    assert!(
-        adapter(&fixture, &sunshine_certificate)
-            .read()
-            .await
-            .is_ok()
-    );
+    assert!(adapter(&fixture).read().await.is_ok());
     {
         let captured = fixture.requests.lock().unwrap();
         assert_eq!(captured.len(), 1);
@@ -278,12 +262,7 @@ async fn pinned_builtin_certificate_rejects_mismatch_and_never_follows_redirects
         assert!(!headers.contains("referer:"));
     }
     let redirect = serve(temporary.path(), vec![format!("HTTP/1.1 302 Found\r\nLocation: {}/api/config\r\nContent-Length: 0\r\nConnection: close\r\n\r\n", fixture.endpoint)]).await;
-    assert!(
-        adapter(&redirect, &sunshine_certificate)
-            .read()
-            .await
-            .is_err()
-    );
+    assert!(adapter(&redirect).read().await.is_err());
     assert_eq!(
         fixture.requests.lock().unwrap().len(),
         1,
@@ -294,30 +273,9 @@ async fn pinned_builtin_certificate_rejects_mismatch_and_never_follows_redirects
 
 #[tokio::test]
 #[ignore = "requires loopback sockets and openssl"]
-async fn system_trust_reports_an_untrusted_sunshine_certificate() {
-    let temporary = tempfile::tempdir().unwrap();
-    certificates(temporary.path());
-    let fixture = serve(temporary.path(), vec![response(config("28"))]).await;
-    let mut adapter = LocalSunshine::new(
-        &fixture.endpoint,
-        "fixture",
-        Zeroizing::new("local-test-password".into()),
-        &[],
-    )
-    .unwrap();
-    let result = adapter.read().await.err();
-    assert!(
-        matches!(result, Some(AdapterError::CertificateUntrusted)),
-        "unexpected result: {result:?}"
-    );
-}
-
-#[tokio::test]
-#[ignore = "requires loopback sockets and openssl"]
 async fn malformed_success_and_oversized_body_fail_closed() {
     let temporary = tempfile::tempdir().unwrap();
     certificates(temporary.path());
-    let sunshine_certificate = std::fs::read(temporary.path().join("sunshine.pem")).unwrap();
     let fixture = serve(
         temporary.path(),
         vec![
@@ -326,18 +284,8 @@ async fn malformed_success_and_oversized_body_fail_closed() {
         ],
     )
     .await;
-    assert!(
-        adapter(&fixture, &sunshine_certificate)
-            .read()
-            .await
-            .is_err()
-    );
-    assert!(
-        adapter(&fixture, &sunshine_certificate)
-            .read()
-            .await
-            .is_err()
-    );
+    assert!(adapter(&fixture).read().await.is_err());
+    assert!(adapter(&fixture).read().await.is_err());
 }
 
 #[tokio::test]
@@ -345,7 +293,6 @@ async fn malformed_success_and_oversized_body_fail_closed() {
 async fn protocol_v2_uses_fixed_sunshine_resources_and_reconciles_application_reordering() {
     let temporary = tempfile::tempdir().unwrap();
     certificates(temporary.path());
-    let certificate = std::fs::read(temporary.path().join("sunshine.pem")).unwrap();
     let original = serde_json::json!({"name":"Steam","output":"","cmd":"","working-dir":"","exclude-global-prep-cmd":false,"elevated":false,"auto-detach":false,"wait-all":false,"exit-timeout":5,"prep-cmd":[],"detached":[],"image-path":""});
     let updated = serde_json::json!({"name":"Steam Remote","output":"","cmd":"","working-dir":"","exclude-global-prep-cmd":false,"elevated":false,"auto-detach":false,"wait-all":false,"exit-timeout":5,"prep-cmd":[],"detached":[],"image-path":""});
     let client_uuid = "123e4567-e89b-12d3-a456-426614174000";
@@ -364,7 +311,7 @@ async fn protocol_v2_uses_fixed_sunshine_resources_and_reconciles_application_re
         ],
     )
     .await;
-    let mut sunshine = adapter(&fixture, &certificate);
+    let mut sunshine = adapter(&fixture);
     let applications = sunshine.applications().await.unwrap();
     let target = applications.applications[0].reference.clone();
     let replacement = ApplicationSpec {
@@ -426,7 +373,6 @@ async fn protocol_v2_uses_fixed_sunshine_resources_and_reconciles_application_re
 async fn sunshine_http_credentials_api_and_version_failures_are_distinct() {
     let temporary = tempfile::tempdir().unwrap();
     certificates(temporary.path());
-    let certificate = std::fs::read(temporary.path().join("sunshine.pem")).unwrap();
     let fixture = serve(
         temporary.path(),
         vec![
@@ -442,15 +388,15 @@ async fn sunshine_http_credentials_api_and_version_failures_are_distinct() {
     )
     .await;
     assert!(matches!(
-        adapter(&fixture, &certificate).read().await,
+        adapter(&fixture).read().await,
         Err(AdapterError::CredentialsRejected)
     ));
     assert!(matches!(
-        adapter(&fixture, &certificate).read().await,
+        adapter(&fixture).read().await,
         Err(AdapterError::ApiUnavailable)
     ));
     assert!(matches!(
-        adapter(&fixture, &certificate).read().await,
+        adapter(&fixture).read().await,
         Err(AdapterError::UnsupportedVersion)
     ));
 }
@@ -475,7 +421,6 @@ impl Journal for JournalFixture {
 async fn real_https_patch_preserves_original_configuration_and_filters_metadata() {
     let temporary = tempfile::tempdir().unwrap();
     certificates(temporary.path());
-    let sunshine_certificate = std::fs::read(temporary.path().join("sunshine.pem")).unwrap();
     let fixture = serve(
         temporary.path(),
         vec![
@@ -493,7 +438,7 @@ async fn real_https_patch_preserves_original_configuration_and_filters_metadata(
     };
     let executor = Executor::new(
         binding.clone(),
-        adapter(&fixture, &sunshine_certificate),
+        adapter(&fixture),
         JournalFixture::default(),
     );
     let task = Task {
@@ -556,7 +501,6 @@ async fn authenticated_wss_delivers_result_and_revocation_stops_reconnect() {
     };
     let temporary = tempfile::tempdir().unwrap();
     certificates(temporary.path());
-    let sunshine_certificate = std::fs::read(temporary.path().join("sunshine.pem")).unwrap();
     let sunshine = serve(temporary.path(), vec![response(config("28"))]).await;
     let binding = Binding {
         manager_id: uuid::Uuid::from_u128(1),
@@ -565,7 +509,7 @@ async fn authenticated_wss_delivers_result_and_revocation_stops_reconnect() {
     };
     let executor = Arc::new(Executor::new(
         binding.clone(),
-        adapter(&sunshine, &sunshine_certificate),
+        adapter(&sunshine),
         JournalFixture::default(),
     ));
     let cert = CertificateDer::from_pem_file(temporary.path().join("server.pem")).unwrap();

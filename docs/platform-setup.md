@@ -1,6 +1,6 @@
 # 各平台安装、配置与覆盖升级
 
-适用于 0.2.0。Client 是管理代理；需要先安装 Sunshine 并在其 Web UI 设置用户名、密码。Manager 地址、Manager 配对码、Sunshine 本机地址和 Sunshine 管理凭据是不同的输入。每个平台只发布一个原生安装包，安装器检查平台/架构/权限、注册服务，然后由 `setup` 完成配置。
+适用于 0.2.1。Client 是管理代理；需要先安装 Sunshine 并在其 Web UI 设置用户名、密码。Manager 地址、Manager 配对码、Sunshine 本机地址和 Sunshine 管理凭据是不同的输入。每个平台只发布一个原生安装包，安装器检查平台/架构/权限、注册服务，然后由 `setup` 完成配置。
 
 ## Windows 11 x64
 
@@ -8,7 +8,7 @@
 
 ```powershell
 $client = "$env:ProgramFiles\SunshineClient\sunshine-client.exe"
-msiexec.exe /i .\sunshine-client-0.2.0-windows-x64.msi /norestart
+msiexec.exe /i .\sunshine-client-0.2.1-windows-x64.msi /norestart
 ```
 
 MSI 只安装程序并登记 Manual/Stopped 服务，不启动配对，也不读取任何秘密。安装完成后，在管理员终端显式运行 `& "$env:ProgramFiles\SunshineClient\sunshine-client.exe" setup --interactive`；原有 CLI 会在需要写入受保护状态时请求提权，`--help` 和 `--version` 不触发 UAC。配对失败不会回滚已提交的安装。
@@ -17,18 +17,18 @@ MSI 只安装程序并登记 Manual/Stopped 服务，不启动配对，也不读
 
 已有版本直接再次运行同一 MSI；原生安装器处理升级、修复、降级检查和服务登记，保留设备身份、凭据、任务记录及启动意图。需要再次设置时运行 `sunshine-client setup` 会复用有效身份或恢复未完成事务，不会强制重新配对。
 
-MSI 同版文件修复：`msiexec.exe /i "完整路径\sunshine-client-0.2.0-windows-x64.msi" REINSTALL=ALL REINSTALLMODE=amus /l*v "%TEMP%\sunshine-client-install.log"`（在 cmd 中执行）。安装器忙碌时等待其他安装结束；3010 表示 Windows 需要重启完成替换。使用 `Get-Service SunshineClient` 和 `sunshine-client service status` 检查服务。
+MSI 同版文件修复：`msiexec.exe /i "完整路径\sunshine-client-0.2.1-windows-x64.msi" REINSTALL=ALL REINSTALLMODE=amus /l*v "%TEMP%\sunshine-client-install.log"`（在 cmd 中执行）。安装器忙碌时等待其他安装结束；3010 表示 Windows 需要重启完成替换。使用 `Get-Service SunshineClient` 和 `sunshine-client service status` 检查服务。
 
 ## Ubuntu 24.04 x86_64
 
 ```sh
-sudo apt install ./sunshine-client_0.2.0_amd64.deb
+sudo apt install ./sunshine-client_0.2.1_amd64.deb
 sudo sunshine-client setup
 ```
 
 默认配置与状态位于 `/var/lib/sunshine-client`，运行账户 `sunshine-client`。安装后运行 `sudo sunshine-client setup`，按提示选择开机启动、立即启动并验证连接。日志：`sudo journalctl -u sunshine-client.service -n 100 --no-pager`。
 
-同版损坏执行 `sudo apt install --reinstall ./sunshine-client_0.2.0_amd64.deb`。0.2.0 不读取 v1 Bootstrap/协议状态；安装后使用当前输入重新运行 `sudo sunshine-client setup`。若安装器没有交互终端，稍后手动运行该命令。
+同版损坏执行 `sudo apt install --reinstall ./sunshine-client_0.2.1_amd64.deb`。0.2.1 不读取 v1 Bootstrap/协议状态；安装后使用当前输入重新运行 `sudo sunshine-client setup`。若安装器没有交互终端，稍后手动运行该命令。
 
 手工归档只包含可执行文件、文档和校验元数据，不包含 Shell/Python 安装包装脚本；生产安装和覆盖请使用 DEB。解压的可执行文件可用于临时诊断，但不替代原生服务安装器。
 
@@ -37,7 +37,7 @@ sudo sunshine-client setup
 只提供 Apple Silicon 原生 PKG，不提供 Intel 版本：
 
 ```sh
-sudo installer -pkg ./sunshine-client-0.2.0-macos-arm64-unsigned.pkg -target /
+sudo installer -pkg ./sunshine-client-0.2.1-macos-arm64-unsigned.pkg -target /
 sudo /usr/local/bin/sunshine-client setup
 ```
 
@@ -45,63 +45,19 @@ sudo /usr/local/bin/sunshine-client setup
 
 再次运行原生 PKG 即可覆盖旧程序，或在保留状态的卸载后重装。安装器保留身份和执行记录；随后运行 `/usr/local/bin/sunshine-client setup`。发行文件未签名、未公证，使用系统提供的本地批准入口允许已校验的程序运行，不要全局关闭系统安全检查。
 
-## Sunshine HTTPS 证书配置（两种互斥模式）
+## 本机 Sunshine HTTPS 与认证边界
 
-Client 始终验证 TLS，不提供 `--insecure`。配置 Sunshine 连接时必须明确选择以下一种模式：
+Client 只接受 `https://127.0.0.1:<port>/` 或等价的 IPv6 回环 IP 字面量。主机名、非回环地址、HTTP、URL 用户信息、查询、片段和额外路径都会在连接前被拒绝；请求不使用系统代理，也不跟随重定向。
 
-1. **系统信任与名称验证**：不提交 `sunshine_certificate` 或 `sunshine_certificate_path`。证书链必须被运行
-   Client 服务的系统账户信任，并且证书 SAN 必须匹配 `sunshine_endpoint` 的主机名或 IP。此模式适合由
-   企业 CA 或公共 CA 签发的证书；只有 endpoint 使用 `127.0.0.1` 时才需要 `IP:127.0.0.1` SAN。
-2. **Sunshine 证书精确固定**：在 `setup` 输入中提供 `sunshine_certificate_path`，指向 Sunshine 配置项
-   `cert` 对应的公开 PEM（通常是 Sunshine 自带的 `cacert.pem`）；自动化也可直接提供
-   `sunshine_certificate` PEM 字符串，两者不能同时存在。Client 保存公开证书并要求服务端呈现完全相同的
-   证书，不依赖系统 CA，也不要求回环 IP SAN。路径必须是本机绝对路径、普通文件且不能是符号链接，私钥
-   `pkey` 绝不能提供给 Client。
+Sunshine 默认使用本机自签名证书。由于连接被限制在内核回环接口，本版本不校验 Sunshine 证书链、名称、指纹或固定值，也不读取和保存 `cacert.pem`。TLS 仍用于加密连接，每个 API 请求均携带受保护状态中的 Sunshine Basic Auth 凭据；401/403 会作为凭据拒绝处理。Manager 是独立的远程安全边界，始终使用标准 WebPKI 身份校验和设备长期凭据认证。
 
-Windows 交互配置会搜索 `%ProgramFiles%\Sunshine\config\credentials\cacert.pem`、
-`%ProgramW6432%\Sunshine\config\credentials\cacert.pem`，并查询 `SunshineService` 的实际可执行文件目录。
-候选文件必须小于等于 64 KiB、不是符号链接或重解析点、恰好包含一个证书且不含私钥；选择前会显示
-SHA-256 指纹。`doctor --sunshine` 的脱敏结果分别报告地址、信任模式、指纹、TCP/TLS/API/凭据和版本状态。
-
-浏览器点击“继续访问”只影响浏览器，不会改变后台服务的系统信任，也不会建立证书固定。若采用系统信任模式，
-核对签发 CA 的来源和 SHA256 指纹后，可将 **CA 公共证书** 导入系统信任库：
-
-公开的首次配对入口使用受保护的 stdin JSON；字段与内部 `deploy/bootstrap.example.json` 不同：
+公开的首次配对入口使用受保护的 stdin JSON：
 
 ```json
-{"server":"https://manager.example.org/","authorization_code":"REPLACE_WITH_INSTANCE_CODE","sunshine_endpoint":"https://127.0.0.1:47990/","sunshine_certificate_path":"/absolute/path/to/cacert.pem","sunshine_username":"REPLACE_LOCALLY","sunshine_password":"REPLACE_LOCALLY"}
+{"server":"https://manager.example.org/","authorization_code":"REPLACE_WITH_INSTANCE_CODE","sunshine_endpoint":"https://127.0.0.1:47990/","sunshine_username":"REPLACE_LOCALLY","sunshine_password":"REPLACE_LOCALLY"}
 ```
 
-此 JSON 只可交给 `sunshine-client setup --input-stdin --non-interactive` 的 stdin。占位符不能直接使用；证书
-路径属于 Client 主机；只提供 Sunshine 的公开证书，绝不提供 `pkey` 私钥；秘密不得放进命令参数、部署日志
-或版本库。`deploy/bootstrap.example.json` 仅供旧的受保护 bootstrap 导入入口使用。
-
-Windows 管理员 PowerShell：
-
-```powershell
-Import-Certificate -FilePath .\sunshine-local-ca.cer -CertStoreLocation Cert:\LocalMachine\Root
-```
-
-Ubuntu（PEM 格式公共证书，扩展名 `.crt`）：
-
-```sh
-sudo install -m 0644 ./sunshine-local-ca.crt /usr/local/share/ca-certificates/sunshine-local-ca.crt
-sudo update-ca-certificates
-```
-
-macOS：
-
-```sh
-sudo security add-trusted-cert -d -r trustRoot -k /Library/Keychains/System.keychain ./sunshine-local-ca.cer
-```
-
-完成后使用管理员终端执行 `sunshine-client doctor --sunshine`，再运行 `sunshine-client setup`。系统信任模式
-发生名称不匹配时，导入 CA 无法修复，必须让证书 SAN 与 endpoint 一致。Sunshine 更换证书后，精确固定模式
-会按设计拒绝连接；停止 Client 服务并核对新证书来源和指纹，然后运行
-`sunshine-client credentials update --interactive`，输入新用户名、密码和 `cacert.pem` 绝对路径。自动化输入
-可增加 `sunshine_certificate_path` 或 `sunshine_certificate`；显式设置 `use_system_trust: true` 会移除旧固定证书，
-且不能同时提供证书字段。留空证书更新会保留现有信任模式。此操作不重新配对 Manager，但 Sunshine 本身若
-更换了设备配对状态，仍需按 Sunshine/Moonlight 流程确认。
+此 JSON 只可交给 `sunshine-client setup --input-stdin --non-interactive` 的 stdin。当前格式拒绝 `sunshine_certificate`、`sunshine_certificate_path`、`sunshine_ca_pem` 和 `use_system_trust` 等旧字段。秘密不得放进命令参数、部署日志或版本库。`credentials update` 只接受新的 Sunshine 用户名和密码。
 
 ## 已有配置、升级与故障处理
 

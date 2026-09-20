@@ -6,8 +6,17 @@ use rand::RngCore;
 use sarmg_client_cli::*;
 use serde::{Deserialize, Serialize};
 use serde_json::{Value, json};
-use std::path::{Path, PathBuf};
+use std::{
+    path::{Path, PathBuf},
+    time::Instant,
+};
 use zeroize::Zeroizing;
+
+const MAX_URL_BYTES: usize = 2_048;
+const MAX_AUTHORIZATION_CODE_BYTES: usize = 64;
+const MAX_SUNSHINE_USERNAME_BYTES: usize = 256;
+const MAX_SUNSHINE_PASSWORD_BYTES: usize = 4_096;
+const MAX_CONFIRMATION_BYTES: usize = 16;
 
 fn default_state() -> PathBuf {
     PathBuf::from(if cfg!(windows) {
@@ -50,8 +59,11 @@ fn provision_error(e: ProvisionError) -> Failure {
         ProvisionError::Rejected => fail(7, "credential_rejected"),
         ProvisionError::Unavailable | ProvisionError::RateLimited => fail(6, "server_unavailable"),
         ProvisionError::Unsupported => fail(10, "unsupported_protocol_or_platform"),
-        ProvisionError::SunshineCertificateUntrusted => fail(6, "sunshine_certificate_untrusted"),
-        ProvisionError::SunshineCertificateMismatch => fail(7, "sunshine_certificate_mismatch"),
+        ProvisionError::PairingEndpointNotFound => fail(10, "pairing_endpoint_not_found"),
+        ProvisionError::PairingHttpMethodRejected => fail(10, "pairing_http_method_rejected"),
+        ProvisionError::PairingServerUpgradeRequired => fail(10, "pairing_server_upgrade_required"),
+        ProvisionError::PairingRequestRejected => fail(2, "pairing_request_rejected"),
+        ProvisionError::PairingUnexpectedHttpStatus => fail(10, "pairing_unexpected_http_status"),
         ProvisionError::SunshineCredentialsRejected => fail(7, "sunshine_credentials_rejected"),
         ProvisionError::SunshineApiUnavailable => fail(6, "sunshine_api_unavailable"),
         ProvisionError::SunshineVersionUnsupported => fail(10, "sunshine_version_unsupported"),
@@ -71,30 +83,28 @@ fn provision_error(e: ProvisionError) -> Failure {
 
 fn sunshine_adapter_error(error: crate::adapter::AdapterError) -> Failure {
     match error {
-        crate::adapter::AdapterError::CertificateUntrusted => {
-            fail(6, "sunshine_certificate_untrusted")
-                .with_detail("tcp=connected tls=failed api=not_attempted credentials=not_attempted version=not_checked")
-        }
-        crate::adapter::AdapterError::CertificateMismatch => {
-            fail(7, "sunshine_certificate_mismatch")
-                .with_detail("tcp=connected tls=certificate_mismatch api=not_attempted credentials=not_attempted version=not_checked")
-        }
         crate::adapter::AdapterError::CredentialsRejected => {
-            fail(7, "sunshine_credentials_rejected")
-                .with_detail("tcp=connected tls=verified api=available credentials=rejected version=not_checked")
+            fail(7, "sunshine_credentials_rejected").with_detail(
+                "tcp=connected tls=verified api=available credentials=rejected version=not_checked",
+            )
         }
         crate::adapter::AdapterError::ApiUnavailable => fail(6, "sunshine_api_unavailable")
-            .with_detail("tcp=unknown tls=unknown api=unavailable credentials=unknown version=not_checked"),
+            .with_detail(
+                "tcp=unknown tls=unknown api=unavailable credentials=unknown version=not_checked",
+            ),
         crate::adapter::AdapterError::UnsupportedVersion => {
-            fail(10, "sunshine_version_unsupported")
-                .with_detail("tcp=connected tls=verified api=available credentials=accepted version=unsupported")
+            fail(10, "sunshine_version_unsupported").with_detail(
+                "tcp=connected tls=verified api=available credentials=accepted version=unsupported",
+            )
         }
         crate::adapter::AdapterError::UnsafeConfiguration
         | crate::adapter::AdapterError::InvalidLocalEndpoint => {
             fail(2, "invalid_sunshine_configuration")
         }
         crate::adapter::AdapterError::ResourceConflict => fail(9, "sunshine_resource_conflict"),
-        crate::adapter::AdapterError::UnsupportedCapability => fail(10, "sunshine_capability_unavailable"),
+        crate::adapter::AdapterError::UnsupportedCapability => {
+            fail(10, "sunshine_capability_unavailable")
+        }
     }
 }
 #[derive(Deserialize)]
@@ -103,10 +113,6 @@ struct PairInput {
     server: String,
     authorization_code: Zeroizing<String>,
     sunshine_endpoint: String,
-    #[serde(default)]
-    sunshine_certificate: Option<String>,
-    #[serde(default)]
-    sunshine_certificate_path: Option<PathBuf>,
     sunshine_username: Zeroizing<String>,
     sunshine_password: Zeroizing<String>,
 }
@@ -124,187 +130,16 @@ impl PairInput {
         }
         url.set_scheme("wss").map_err(input_error)?;
         url.set_path("/sunshine-client/v2/connect");
-        if self.sunshine_certificate.is_some() && self.sunshine_certificate_path.is_some() {
-            return Err(fail(2, "duplicate_sunshine_certificate_source"));
-        }
-        let sunshine_certificate = match (self.sunshine_certificate, self.sunshine_certificate_path)
-        {
-            (Some(pem), None) => Some(pem),
-            (None, Some(path)) => Some(read_sunshine_certificate(&path)?),
-            (None, None) => None,
-            (Some(_), Some(_)) => unreachable!(),
-        };
         let b = Bootstrap {
             manager_endpoint: url.to_string(),
             enrollment_token: self.authorization_code,
             sunshine_endpoint: self.sunshine_endpoint,
-            sunshine_certificate,
             sunshine_username: self.sunshine_username,
             sunshine_password: self.sunshine_password,
         };
         b.validate().map_err(provision_error)?;
         Ok(b)
     }
-}
-
-fn read_sunshine_certificate(path: &Path) -> Result<String> {
-    if !path.is_absolute() {
-        return Err(fail(2, "sunshine_certificate_path_must_be_absolute"));
-    }
-    let metadata = std::fs::symlink_metadata(path).map_err(certificate_io_error)?;
-    if !safe_certificate_metadata(&metadata) || metadata.len() > 64 * 1024 {
-        return Err(fail(2, "invalid_sunshine_certificate_file"));
-    }
-    let bytes = std::fs::read(path).map_err(certificate_io_error)?;
-    if bytes.len() > 64 * 1024 {
-        return Err(fail(2, "invalid_sunshine_certificate_file"));
-    }
-    crate::adapter::certificate_sha256_fingerprint(&bytes)
-        .map_err(|_| fail(2, "invalid_sunshine_certificate_file"))?;
-    String::from_utf8(bytes).map_err(|_| fail(2, "invalid_sunshine_certificate_file"))
-}
-
-fn certificate_io_error(error: std::io::Error) -> Failure {
-    match error.kind() {
-        std::io::ErrorKind::PermissionDenied => fail(3, "sunshine_certificate_unreadable"),
-        _ => fail(2, "invalid_sunshine_certificate_file"),
-    }
-}
-
-fn safe_certificate_metadata(metadata: &std::fs::Metadata) -> bool {
-    if !metadata.is_file() || metadata.file_type().is_symlink() {
-        return false;
-    }
-    #[cfg(windows)]
-    {
-        use std::os::windows::fs::MetadataExt;
-        const FILE_ATTRIBUTE_REPARSE_POINT: u32 = 0x400;
-        if metadata.file_attributes() & FILE_ATTRIBUTE_REPARSE_POINT != 0 {
-            return false;
-        }
-    }
-    true
-}
-
-#[cfg(windows)]
-fn sunshine_service_executable() -> Option<PathBuf> {
-    use windows_service::{
-        service::ServiceAccess,
-        service_manager::{ServiceManager, ServiceManagerAccess},
-    };
-    let manager =
-        ServiceManager::local_computer(None::<&str>, ServiceManagerAccess::CONNECT).ok()?;
-    let service = manager
-        .open_service("SunshineService", ServiceAccess::QUERY_CONFIG)
-        .ok()?;
-    service
-        .query_config()
-        .ok()
-        .map(|config| config.executable_path)
-}
-
-#[cfg(not(windows))]
-fn sunshine_service_executable() -> Option<PathBuf> {
-    None
-}
-
-fn extend_windows_certificate_candidates(
-    candidates: &mut Vec<PathBuf>,
-    program_files: Option<PathBuf>,
-    program_w6432: Option<PathBuf>,
-    service_executable: Option<PathBuf>,
-) {
-    for directory in [program_files, program_w6432].into_iter().flatten() {
-        candidates.push(directory.join("Sunshine/config/credentials/cacert.pem"));
-    }
-    if let Some(executable) = service_executable
-        && let Some(directory) = executable.parent()
-    {
-        candidates.push(directory.join("config/credentials/cacert.pem"));
-        candidates.push(directory.join("config/cacert.pem"));
-    }
-}
-
-fn sunshine_certificate_candidates() -> Vec<PathBuf> {
-    let mut candidates = Vec::new();
-    if let Some(directory) = std::env::var_os("SUNSHINE_CONFIG_DIR") {
-        candidates.push(PathBuf::from(directory).join("cacert.pem"));
-    }
-    if let Some(directory) = std::env::var_os("XDG_CONFIG_HOME") {
-        candidates.push(PathBuf::from(directory).join("sunshine/cacert.pem"));
-    }
-    if let Some(home) = std::env::var_os("HOME") {
-        candidates.push(PathBuf::from(home).join(".config/sunshine/cacert.pem"));
-    }
-    if let Some(program_data) = std::env::var_os("PROGRAMDATA") {
-        candidates.push(PathBuf::from(program_data).join("Sunshine/config/credentials/cacert.pem"));
-    }
-    extend_windows_certificate_candidates(
-        &mut candidates,
-        std::env::var_os("ProgramFiles").map(PathBuf::from),
-        std::env::var_os("ProgramW6432").map(PathBuf::from),
-        sunshine_service_executable(),
-    );
-    candidates.extend([
-        PathBuf::from("/etc/sunshine/cacert.pem"),
-        PathBuf::from("/var/lib/sunshine/.config/sunshine/cacert.pem"),
-    ]);
-    candidates.sort_by_key(|path| path.to_string_lossy().to_ascii_lowercase());
-    candidates.dedup_by(|left, right| {
-        left.to_string_lossy()
-            .eq_ignore_ascii_case(&right.to_string_lossy())
-    });
-    candidates.retain(|path| {
-        std::fs::symlink_metadata(path).is_ok_and(|metadata| {
-            safe_certificate_metadata(&metadata)
-                && metadata.len() <= 64 * 1024
-                && std::fs::read(path)
-                    .is_ok_and(|pem| crate::adapter::certificate_sha256_fingerprint(&pem).is_ok())
-        })
-    });
-    candidates
-}
-
-fn prompt_sunshine_certificate() -> Result<Option<PathBuf>> {
-    let candidates = sunshine_certificate_candidates();
-    if !candidates.is_empty() {
-        eprintln!("Discovered local Sunshine public certificates:");
-        for (index, path) in candidates.iter().enumerate() {
-            let fingerprint = std::fs::read(path)
-                .ok()
-                .and_then(|pem| crate::adapter::certificate_sha256_fingerprint(&pem).ok())
-                .unwrap_or_else(|| "unavailable".into());
-            eprintln!(
-                "  {}. {} (SHA-256 {})",
-                index + 1,
-                path.display(),
-                fingerprint
-            );
-        }
-    }
-    let answer = prompt(
-        if candidates.is_empty() {
-            "Sunshine cacert.pem absolute path (or type 'system' explicitly)"
-        } else {
-            "Select certificate number/path [1], or type 'system' explicitly"
-        },
-        false,
-    )?;
-    if answer == "system" {
-        return Ok(None);
-    }
-    if answer.is_empty() && !candidates.is_empty() {
-        return Ok(Some(candidates[0].clone()));
-    }
-    if let Ok(index) = answer.parse::<usize>()
-        && (1..=candidates.len()).contains(&index)
-    {
-        return Ok(Some(candidates[index - 1].clone()));
-    }
-    if answer.is_empty() {
-        return Err(fail(2, "sunshine_certificate_selection_required"));
-    }
-    Ok(Some(PathBuf::from(answer)))
 }
 #[derive(Deserialize, Serialize)]
 #[serde(deny_unknown_fields)]
@@ -316,37 +151,6 @@ struct Settings {
 struct Credentials {
     sunshine_username: Zeroizing<String>,
     sunshine_password: Zeroizing<String>,
-    #[serde(default)]
-    sunshine_certificate: Option<String>,
-    #[serde(default)]
-    sunshine_certificate_path: Option<PathBuf>,
-    #[serde(default)]
-    use_system_trust: bool,
-}
-
-fn credential_certificate_update(credentials: &Credentials) -> Result<Option<Option<String>>> {
-    if credentials.use_system_trust
-        && (credentials.sunshine_certificate.is_some()
-            || credentials.sunshine_certificate_path.is_some())
-    {
-        return Err(fail(2, "conflicting_sunshine_trust_update"));
-    }
-    if credentials.sunshine_certificate.is_some() && credentials.sunshine_certificate_path.is_some()
-    {
-        return Err(fail(2, "duplicate_sunshine_certificate_source"));
-    }
-    if credentials.use_system_trust {
-        return Ok(Some(None));
-    }
-    match (
-        credentials.sunshine_certificate.as_ref(),
-        credentials.sunshine_certificate_path.as_deref(),
-    ) {
-        (Some(pem), None) => Ok(Some(Some(pem.clone()))),
-        (None, Some(path)) => Ok(Some(Some(read_sunshine_certificate(path)?))),
-        (None, None) => Ok(None),
-        (Some(_), Some(_)) => unreachable!(),
-    }
 }
 fn read_store(path: &Path) -> Result<Option<ProtectedState>> {
     match std::fs::symlink_metadata(path.join("provisioning")) {
@@ -384,7 +188,6 @@ fn current(store: &ProtectedState) -> Result<(Bootstrap, Option<Identity>)> {
                 manager_endpoint: String::new(),
                 enrollment_token: Zeroizing::new(String::new()),
                 sunshine_endpoint: settings.sunshine_endpoint,
-                sunshine_certificate: None,
                 sunshine_username: Zeroizing::new(String::new()),
                 sunshine_password: Zeroizing::new(String::new()),
             },
@@ -458,10 +261,11 @@ fn document<T: serde::de::DeserializeOwned + Send + 'static>(args: &Args) -> Res
     }
 }
 
-fn ask_yes_no(label: &str, default: bool) -> Result<bool> {
-    let value = prompt(
+fn ask_yes_no(label: &str, default: bool, deadline: Instant) -> Result<bool> {
+    let value = prompt_text(
         &format!("{label} [{}]", if default { "yes" } else { "no" }),
-        false,
+        MAX_CONFIRMATION_BYTES,
+        deadline,
     )?;
     match value.trim().to_ascii_lowercase().as_str() {
         "" => Ok(default),
@@ -582,6 +386,7 @@ fn wait_for_healthy(path: &Path, timeout: std::time::Duration) -> Result<Value> 
 }
 
 fn execute_pair(args: &Args, path: &Path) -> Result<Value> {
+    let deadline = Instant::now() + args.timeout;
     let words: Vec<_> = args.words.iter().map(String::as_str).collect();
     args.validate_options(&["--interactive", "--input-stdin", "--server"])?;
     let resume = words == ["pair", "resume"];
@@ -595,14 +400,28 @@ fn execute_pair(args: &Args, path: &Path) -> Result<Value> {
                 server: if let Some(s) = args.get("--server") {
                     s.into()
                 } else {
-                    prompt("Server HTTPS origin", false)?
+                    prompt_text("Server HTTPS origin", MAX_URL_BYTES, deadline)?
                 },
-                authorization_code: Zeroizing::new(prompt("Authorization code", true)?),
-                sunshine_endpoint: prompt("Local Sunshine HTTPS URL", false)?,
-                sunshine_certificate: None,
-                sunshine_certificate_path: prompt_sunshine_certificate()?,
-                sunshine_username: Zeroizing::new(prompt("Sunshine username", false)?),
-                sunshine_password: Zeroizing::new(prompt("Sunshine password", true)?),
+                authorization_code: prompt_secret(
+                    "Authorization code",
+                    MAX_AUTHORIZATION_CODE_BYTES,
+                    deadline,
+                )?,
+                sunshine_endpoint: prompt_text(
+                    "Local Sunshine HTTPS URL",
+                    MAX_URL_BYTES,
+                    deadline,
+                )?,
+                sunshine_username: Zeroizing::new(prompt_text(
+                    "Sunshine username",
+                    MAX_SUNSHINE_USERNAME_BYTES,
+                    deadline,
+                )?),
+                sunshine_password: prompt_secret(
+                    "Sunshine password",
+                    MAX_SUNSHINE_PASSWORD_BYTES,
+                    deadline,
+                )?,
             }
             .bootstrap()?,
         )
@@ -644,10 +463,12 @@ fn execute_pair(args: &Args, path: &Path) -> Result<Value> {
             id.config = b;
             id.enrolled = false;
             id.persist(&store).map_err(provision_error)?;
-        } else if let Some(id) = existing {
-            if id.enrolled || id.config != b {
+        } else if let Some(mut id) = existing {
+            if id.enrolled || id.config.manager_endpoint != b.manager_endpoint {
                 return Err(fail(5, "binding_replacement_requires_pair_replace"));
             }
+            id.config = b;
+            id.persist(&store).map_err(provision_error)?;
         } else if b.enrollment_token.is_empty() {
             store
                 .put(
@@ -673,9 +494,13 @@ fn execute_pair(args: &Args, path: &Path) -> Result<Value> {
     }
     drop(store);
     let rt = tokio::runtime::Runtime::new().map_err(storage_error)?;
+    let remaining = deadline
+        .checked_duration_since(Instant::now())
+        .filter(|remaining| !remaining.is_zero())
+        .ok_or_else(|| fail(9, "pairing_result_uncertain"))?;
     let result = rt.block_on(async {
         tokio::select! {
-            r = tokio::time::timeout(args.timeout, provisioning::pair(path)) =>
+            r = tokio::time::timeout(remaining, provisioning::pair(path)) =>
                 r.map_err(|_| fail(9, "pairing_result_uncertain"))?.map_err(provision_error),
             _ = tokio::signal::ctrl_c() => Err(fail(130, "interrupted_resume_required")),
         }
@@ -759,10 +584,21 @@ fn setup(args: &Args, path: PathBuf) -> Result<Value> {
             }
         }
         let has_protected_input = args.has("--input-stdin") || args.has("--interactive");
-        let resume = existing.is_some()
+        let resume = if existing.is_some()
             && !has_protected_input
             && args.get("--server").is_none()
-            && !args.has("--non-interactive");
+            && interactive
+        {
+            eprintln!("[setup] pairing: pending_request_found");
+            ask_yes_no(
+                "Resume without submitting a new authorization code?",
+                false,
+                Instant::now() + args.timeout,
+            )
+            .map_err(|error| error.at_step("pairing"))?
+        } else {
+            false
+        };
         let pair_words = if resume {
             vec!["pair".into(), "resume".into()]
         } else {
@@ -789,12 +625,17 @@ fn setup(args: &Args, path: PathBuf) -> Result<Value> {
         json!({"state":"active","durable_identity":true}),
     );
     let (enable, start, verify) = if interactive {
+        let deadline = Instant::now() + args.timeout;
         (
-            ask_yes_no("Enable service at system startup?", default_enable)
+            ask_yes_no(
+                "Enable service at system startup?",
+                default_enable,
+                deadline,
+            )
+            .map_err(|error| setup_failure(error, &pairing, "preferences"))?,
+            ask_yes_no("Run the service now?", default_start, deadline)
                 .map_err(|error| setup_failure(error, &pairing, "preferences"))?,
-            ask_yes_no("Run the service now?", default_start)
-                .map_err(|error| setup_failure(error, &pairing, "preferences"))?,
-            ask_yes_no("Verify the connection now?", default_start)
+            ask_yes_no("Verify the connection now?", default_start, deadline)
                 .map_err(|error| setup_failure(error, &pairing, "preferences"))?,
         )
     } else {
@@ -941,7 +782,7 @@ pub fn entry(raw: Vec<String>) -> u8 {
     // Help and version are read-only and must remain available without UAC.
     if args.has("--help") {
         println!(
-            "sunshine-client: setup; config init|show|edit|validate|diff|apply; pair [status|resume|replace]; credentials update; status; doctor; service status|start|stop|restart|enable|disable; run; version\nGlobal: --format human|json|ndjson --non-interactive --timeout 60s --no-color --config ABSOLUTE_STATE_DIRECTORY (--state compatibility alias)\nsetup/pair uses --interactive or --input-stdin. Sunshine's built-in certificate is accepted only when sunshine_certificate_path or sunshine_certificate is supplied through protected input. setup completes pairing, service startup policy and connection verification. No secret arguments. config edit uses VISUAL or EDITOR and commits through the same revision check as config apply. Services must be stopped for writes."
+            "sunshine-client: setup; config init|show|edit|validate|diff|apply; pair [status|resume|replace]; credentials update; status; doctor; service status|start|stop|restart|enable|disable; run; version\nGlobal: --format human|json|ndjson --non-interactive --timeout 60s --no-color --config ABSOLUTE_STATE_DIRECTORY (--state compatibility alias)\nsetup/pair uses --interactive or --input-stdin. Local Sunshine must use an HTTPS loopback IP and valid Sunshine API credentials; its local certificate identity is not checked. setup completes pairing, service startup policy and connection verification. No secret arguments. config edit uses VISUAL or EDITOR and commits through the same revision check as config apply. Services must be stopped for writes."
         );
         return 0;
     }
@@ -1106,17 +947,14 @@ fn execute(args: &Args) -> Result<Value> {
                 let observation = observation.map_err(sunshine_adapter_error)?;
                 value["sunshine"] = json!({
                     "endpoint": b.sunshine_endpoint,
-                    "certificate_path": Value::Null,
-                    "certificate_sha256": b.sunshine_certificate.as_deref()
-                        .and_then(|pem| crate::adapter::certificate_sha256_fingerprint(pem.as_bytes()).ok()),
-                    "certificate_mode": if b.sunshine_certificate.is_some() {"exact_pin"} else {"system_trust"},
                     "tcp": "connected",
-                    "tls": "verified",
+                    "tls": "encrypted",
+                    "certificate_identity": "not_checked_local_loopback_policy",
                     "api": "available",
                     "sunshine_version": observation.sunshine_version(),
                     "credentials": "accepted",
                     "version_supported": true,
-                    "trust_context": if b.sunshine_certificate.is_some() {"exact_certificate_pin"} else {"current_cli_account"}
+                    "authentication": "sunshine_basic_credentials"
                 });
             }
             if args.has("--check") && value["health"] != "healthy" {
@@ -1231,21 +1069,18 @@ fn execute(args: &Args) -> Result<Value> {
         ["credentials", "update"] => {
             args.validate_options(&["--interactive", "--input-stdin"])?;
             let c: Credentials = if args.has("--interactive") {
-                let trust = prompt(
-                    "New Sunshine cacert.pem path (blank keeps current, 'system' uses system trust)",
-                    false,
-                )?;
-                let (sunshine_certificate_path, use_system_trust) = match trust.as_str() {
-                    "" => (None, false),
-                    "system" => (None, true),
-                    value => (Some(PathBuf::from(value)), false),
-                };
+                let deadline = Instant::now() + args.timeout;
                 Credentials {
-                    sunshine_username: Zeroizing::new(prompt("Sunshine username", false)?),
-                    sunshine_password: Zeroizing::new(prompt("Sunshine password", true)?),
-                    sunshine_certificate: None,
-                    sunshine_certificate_path,
-                    use_system_trust,
+                    sunshine_username: Zeroizing::new(prompt_text(
+                        "Sunshine username",
+                        MAX_SUNSHINE_USERNAME_BYTES,
+                        deadline,
+                    )?),
+                    sunshine_password: prompt_secret(
+                        "Sunshine password",
+                        MAX_SUNSHINE_PASSWORD_BYTES,
+                        deadline,
+                    )?,
                 }
             } else {
                 document(args)?
@@ -1253,12 +1088,8 @@ fn execute(args: &Args) -> Result<Value> {
             let _guard = MaintenanceGuard::acquire(&path).map_err(storage_error)?;
             let store = ProtectedState::open(&path.join("provisioning")).map_err(storage_error)?;
             let mut id = identity(&store)?.ok_or_else(|| fail(4, "awaiting_pairing"))?;
-            let certificate = credential_certificate_update(&c)?;
             id.config.sunshine_username = c.sunshine_username;
             id.config.sunshine_password = c.sunshine_password;
-            if let Some(certificate) = certificate {
-                id.config.sunshine_certificate = certificate;
-            }
             id.config.adapter().map_err(provision_error)?;
             id.persist(&store).map_err(provision_error)?;
             Ok(json!({"committed":true,"binding":id.binding,"restart_required":true}))
@@ -1267,7 +1098,11 @@ fn execute(args: &Args) -> Result<Value> {
             args.validate_options(&["--interactive"])?;
             let candidate = Settings {
                 sunshine_endpoint: if args.has("--interactive") {
-                    prompt("Local Sunshine HTTPS URL", false)?
+                    prompt_text(
+                        "Local Sunshine HTTPS URL",
+                        MAX_URL_BYTES,
+                        Instant::now() + args.timeout,
+                    )?
                 } else {
                     "https://127.0.0.1:47990/".into()
                 },
@@ -1345,7 +1180,6 @@ fn validate_settings(settings: &Settings) -> Result<()> {
         &settings.sunshine_endpoint,
         "validation",
         Zeroizing::new("validation".into()),
-        &[],
     )
     .map_err(input_error)?;
     Ok(())
@@ -1354,35 +1188,6 @@ fn validate_settings(settings: &Settings) -> Result<()> {
 #[cfg(test)]
 mod setup_tests {
     use super::*;
-
-    fn credentials() -> Credentials {
-        Credentials {
-            sunshine_username: Zeroizing::new("user".into()),
-            sunshine_password: Zeroizing::new("password".into()),
-            sunshine_certificate: None,
-            sunshine_certificate_path: None,
-            use_system_trust: false,
-        }
-    }
-
-    #[test]
-    fn credential_update_distinguishes_keep_pin_and_system_trust() {
-        assert_eq!(credential_certificate_update(&credentials()).unwrap(), None);
-        let mut pinned = credentials();
-        pinned.sunshine_certificate = Some("certificate".into());
-        assert_eq!(
-            credential_certificate_update(&pinned).unwrap(),
-            Some(Some("certificate".into()))
-        );
-        let mut system = credentials();
-        system.use_system_trust = true;
-        assert_eq!(credential_certificate_update(&system).unwrap(), Some(None));
-        system.sunshine_certificate = Some("certificate".into());
-        assert_eq!(
-            credential_certificate_update(&system).unwrap_err().code,
-            "conflicting_sunshine_trust_update"
-        );
-    }
 
     #[test]
     fn startup_policy_requires_a_verified_platform_state() {
@@ -1436,38 +1241,6 @@ mod setup_tests {
             child
                 .validate_options(&["--interactive", "--input-stdin", "--server"])
                 .is_ok()
-        );
-    }
-
-    #[test]
-    fn windows_sunshine_certificate_paths_cover_program_files_and_service_location() {
-        let mut candidates = Vec::new();
-        extend_windows_certificate_candidates(
-            &mut candidates,
-            Some(PathBuf::from("C:/Program Files")),
-            Some(PathBuf::from("D:/Native Programs")),
-            Some(PathBuf::from("E:/Custom Sunshine/sunshine.exe")),
-        );
-        assert!(candidates.contains(&PathBuf::from(
-            "C:/Program Files/Sunshine/config/credentials/cacert.pem"
-        )));
-        assert!(candidates.contains(&PathBuf::from(
-            "D:/Native Programs/Sunshine/config/credentials/cacert.pem"
-        )));
-        assert!(candidates.contains(&PathBuf::from(
-            "E:/Custom Sunshine/config/credentials/cacert.pem"
-        )));
-    }
-
-    #[test]
-    fn unreadable_certificate_has_a_distinct_diagnostic() {
-        assert_eq!(
-            certificate_io_error(std::io::Error::new(
-                std::io::ErrorKind::PermissionDenied,
-                "denied"
-            ))
-            .code,
-            "sunshine_certificate_unreadable"
         );
     }
 

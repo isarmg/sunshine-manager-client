@@ -23,8 +23,6 @@ pub struct Bootstrap {
     pub manager_endpoint: String,
     pub enrollment_token: Zeroizing<String>,
     pub sunshine_endpoint: String,
-    #[serde(default, skip_serializing_if = "Option::is_none")]
-    pub sunshine_certificate: Option<String>,
     pub sunshine_username: Zeroizing<String>,
     pub sunshine_password: Zeroizing<String>,
 }
@@ -56,10 +54,16 @@ pub enum ProvisionError {
     RateLimited,
     #[error("Manager protocol or platform is unsupported")]
     Unsupported,
-    #[error("Sunshine certificate is not trusted")]
-    SunshineCertificateUntrusted,
-    #[error("Sunshine certificate pin does not match")]
-    SunshineCertificateMismatch,
+    #[error("Manager pairing endpoint was not found")]
+    PairingEndpointNotFound,
+    #[error("Manager or reverse proxy rejected the pairing HTTP method")]
+    PairingHttpMethodRejected,
+    #[error("Manager requires a component upgrade")]
+    PairingServerUpgradeRequired,
+    #[error("Manager rejected the pairing request")]
+    PairingRequestRejected,
+    #[error("Manager returned an unexpected pairing HTTP status")]
+    PairingUnexpectedHttpStatus,
     #[error("Sunshine rejected its local credentials")]
     SunshineCredentialsRejected,
     #[error("Sunshine HTTPS API is unavailable")]
@@ -105,10 +109,6 @@ impl Bootstrap {
             &self.sunshine_endpoint,
             &self.sunshine_username,
             self.sunshine_password.clone(),
-            self.sunshine_certificate
-                .as_deref()
-                .unwrap_or_default()
-                .as_bytes(),
         )
         .map_err(config_error)
     }
@@ -205,7 +205,7 @@ async fn resolve_pairing(config: &Bootstrap) -> Result<PairingTarget, ProvisionE
     let client = system_client()?;
     let response = execute_bounded(&client, request).await?;
     if !response.status.is_success() {
-        return Err(classify_status(response.status.as_u16()));
+        return Err(classify_response(&response));
     }
     let target: PairingTarget = serde_json::from_slice(&response.body).map_err(config_error)?;
     if target.manager_id.is_nil() || target.device_id.is_nil() {
@@ -284,14 +284,14 @@ async fn provision(
         *request.body_mut()=Some(serde_json::to_vec(&serde_json::json!({"device_id":identity.binding.device_id,"installation_id":identity.binding.installation_id,"token":identity.config.enrollment_token.as_str(),"credential":identity.credential.as_str()})).map_err(config_error)?.into());
         let response = execute_bounded(&client, request).await?;
         if matches!(response.status.as_u16(), 401 | 403) {
-            return Err(classify_status(response.status.as_u16()));
+            return Err(classify_response(&response));
         }
         if !response.status.is_success() {
-            return Err(classify_status(response.status.as_u16()));
+            return Err(classify_response(&response));
         }
         serde_json::from_slice(&response.body).map_err(config_error)?
     } else {
-        return Err(classify_status(response.status.as_u16()));
+        return Err(classify_response(&response));
     };
     if binding != identity.binding {
         return Err(ProvisionError::Configuration);
@@ -326,12 +326,6 @@ pub async fn pair(state_path: &Path) -> Result<(), ProvisionError> {
         .read()
         .await
         .map_err(|error| match error {
-            crate::adapter::AdapterError::CertificateUntrusted => {
-                ProvisionError::SunshineCertificateUntrusted
-            }
-            crate::adapter::AdapterError::CertificateMismatch => {
-                ProvisionError::SunshineCertificateMismatch
-            }
             crate::adapter::AdapterError::CredentialsRejected => {
                 ProvisionError::SunshineCredentialsRejected
             }
@@ -437,15 +431,16 @@ pub async fn run(state_path: &Path, shutdown: watch::Receiver<bool>) -> Result<(
 mod bootstrap_tests {
     fn configuration() -> serde_json::Value {
         serde_json::json!({"manager_endpoint":"wss://manager.example.org/sunshine-client/v2/connect", "enrollment_token":"a".repeat(64),
-            "sunshine_endpoint":"https://127.0.0.1:47990/", "sunshine_certificate":null, "sunshine_username":"fixture", "sunshine_password":"local-only"})
+            "sunshine_endpoint":"https://127.0.0.1:47990/", "sunshine_username":"fixture", "sunshine_password":"local-only"})
     }
     #[test]
-    fn bootstrap_accepts_pinned_sunshine_certificate_and_server_resolved_binding() {
+    fn bootstrap_accepts_only_loopback_sunshine_and_server_resolved_binding() {
         let config = configuration();
         assert!(super::validate_bootstrap(&serde_json::to_vec(&config).unwrap()).is_ok());
         for field in [
             "manager_ca_pem",
             "sunshine_ca_pem",
+            "sunshine_certificate",
             "sunshine_certificate_path",
             "manager_id",
             "device_id",
@@ -491,13 +486,26 @@ mod bootstrap_tests {
     }
 }
 
-fn classify_status(status: u16) -> ProvisionError {
+fn classify_response(response: &BoundedResponse) -> ProvisionError {
+    #[derive(Deserialize)]
+    struct ErrorCode {
+        code: String,
+    }
+    if serde_json::from_slice::<ErrorCode>(&response.body)
+        .is_ok_and(|error| error.code == "unsupported_client_protocol")
+    {
+        return ProvisionError::Unsupported;
+    }
+    let status = response.status.as_u16();
     match status {
         401 | 403 => ProvisionError::Rejected,
         429 => ProvisionError::RateLimited,
         408 | 500..=599 => ProvisionError::Unavailable,
-        404 | 405 | 406 | 426 => ProvisionError::Unsupported,
-        _ => ProvisionError::Configuration,
+        404 => ProvisionError::PairingEndpointNotFound,
+        405 => ProvisionError::PairingHttpMethodRejected,
+        406 | 426 => ProvisionError::PairingServerUpgradeRequired,
+        400..=499 => ProvisionError::PairingRequestRejected,
+        _ => ProvisionError::PairingUnexpectedHttpStatus,
     }
 }
 fn client_os() -> Result<ClientOs, ProvisionError> {
@@ -514,10 +522,37 @@ mod error_tests {
     use super::*;
     #[test]
     fn temporary_failures_are_not_bad_credentials() {
-        assert!(matches!(classify_status(503), ProvisionError::Unavailable));
-        assert!(matches!(classify_status(429), ProvisionError::RateLimited));
-        assert!(matches!(classify_status(401), ProvisionError::Rejected));
-        assert!(matches!(classify_status(426), ProvisionError::Unsupported));
+        let response = |status, body: &[u8]| BoundedResponse {
+            status: reqwest::StatusCode::from_u16(status).unwrap(),
+            body: body.to_vec(),
+        };
+        assert!(matches!(
+            classify_response(&response(503, b"")),
+            ProvisionError::Unavailable
+        ));
+        assert!(matches!(
+            classify_response(&response(404, b"")),
+            ProvisionError::PairingEndpointNotFound
+        ));
+        assert!(matches!(
+            classify_response(&response(405, b"")),
+            ProvisionError::PairingHttpMethodRejected
+        ));
+        assert!(matches!(
+            classify_response(&response(426, b"")),
+            ProvisionError::PairingServerUpgradeRequired
+        ));
+        assert!(matches!(
+            classify_response(&response(400, br#"{"code":"unsupported_client_protocol"}"#)),
+            ProvisionError::Unsupported
+        ));
+        assert!(matches!(
+            classify_response(&response(
+                400,
+                br#"{"code":"anything_else","message":"secret"}"#
+            )),
+            ProvisionError::PairingRequestRejected
+        ));
     }
 }
 
@@ -529,7 +564,7 @@ pub(crate) async fn network_probe(config: &Bootstrap) -> Result<serde_json::Valu
     let request = client.get(url).build().map_err(config_error)?;
     let response = execute_bounded(&client, request).await?;
     if !response.status.is_success() {
-        return Err(classify_status(response.status.as_u16()));
+        return Err(classify_response(&response));
     }
     Ok(
         serde_json::json!({"reachable":true,"scope":"public_health_endpoint","trust_context":"current_cli_account"}),

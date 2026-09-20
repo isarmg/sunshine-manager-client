@@ -732,9 +732,7 @@ fn rejected_adapter(error: AdapterError) -> Report {
             AdapterError::UnsafeConfiguration => Rejection::UnsafeConfiguration,
             AdapterError::ResourceConflict => Rejection::ResourceConflict,
             AdapterError::UnsupportedCapability => Rejection::UnsupportedCapability,
-            AdapterError::CertificateUntrusted
-            | AdapterError::CertificateMismatch
-            | AdapterError::CredentialsRejected
+            AdapterError::CredentialsRejected
             | AdapterError::ApiUnavailable
             | AdapterError::InvalidLocalEndpoint => Rejection::SunshineUnavailable,
         },

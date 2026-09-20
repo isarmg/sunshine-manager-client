@@ -1,6 +1,6 @@
 [package]
 name = "sunshine-client"
-version = "0.2.0"
+version = "0.2.1"
 edition = "2024"
 rust-version = "1.98"
 license = "Apache-2.0"
@@ -13,8 +13,8 @@ futures-util = { version = "0.3", features = ["sink"] }
 reqwest = { version = "0.13", default-features = false, features = ["http2", "json", "rustls"] }
 rand = "0.8"
 uuid = { version = "1", features = ["v4", "serde"] }
-sarmg-client-cli = { git = "https://github.com/isarmg/sarmg-foundation-client.git", rev = "2fa783a1eb7aefde8e54e328f91d67aa9e1eb890", version = "=0.9.1" }
-sarmg-client-runtime = { git = "https://github.com/isarmg/sarmg-foundation-client.git", rev = "2fa783a1eb7aefde8e54e328f91d67aa9e1eb890", version = "=0.9.1" }
+sarmg-client-cli = { git = "https://github.com/isarmg/sarmg-foundation-client.git", rev = "c081f5c3b5d5f6e74f029d03dd7d98cb5d88a456", version = "=0.9.10" }
+sarmg-client-runtime = { git = "https://github.com/isarmg/sarmg-foundation-client.git", rev = "c081f5c3b5d5f6e74f029d03dd7d98cb5d88a456", version = "=0.9.10" }
 serde = { version = "1", features = ["derive"] }
 serde_json = "1"
 sha2 = "0.10"
@@ -23,12 +23,11 @@ thiserror = "2"
 tokio = { version = "1", features = ["macros", "process", "rt-multi-thread", "sync", "time", "signal"] }
 tokio-tungstenite = { version = "0.28", default-features = false, features = ["connect", "rustls-tls-webpki-roots"] }
 tokio-rustls = "0.26"
-rustls-platform-verifier = "0.7"
 url = "2"
 zeroize = { version = "1", features = ["serde"] }
 
 [target.'cfg(unix)'.dependencies]
-sarmg-client-fs-safety = { git = "https://github.com/isarmg/sarmg-foundation-client.git", rev = "2fa783a1eb7aefde8e54e328f91d67aa9e1eb890", version = "=0.9.1" }
+sarmg-client-fs-safety = { git = "https://github.com/isarmg/sarmg-foundation-client.git", rev = "c081f5c3b5d5f6e74f029d03dd7d98cb5d88a456", version = "=0.9.10" }
 
 [target.'cfg(target_os = "windows")'.dependencies]
 rusqlite = { version = "0.32", features = ["bundled"] }

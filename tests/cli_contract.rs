@@ -74,7 +74,7 @@ fn credentials_update_preserves_binding_credential_and_execution_journal() {
     let _root = sunshine_client::storage::prepare_root(&state).unwrap();
     let store = ProtectedState::open(&state.join("provisioning")).unwrap();
     let binding = json!({"manager_id":uuid::Uuid::new_v4(),"device_id":uuid::Uuid::new_v4(),"installation_id":uuid::Uuid::new_v4()});
-    let identity = json!({"binding":binding,"credential":"b".repeat(64),"enrolled":true,"config":{"manager_endpoint":"wss://manager.example/sunshine-client/v2/connect","enrollment_token":"","sunshine_endpoint":"https://127.0.0.1:47990/","sunshine_certificate":"old-certificate","sunshine_username":"old","sunshine_password":"old-secret"}});
+    let identity = json!({"binding":binding,"credential":"b".repeat(64),"enrolled":true,"config":{"manager_endpoint":"wss://manager.example/sunshine-client/v2/connect","enrollment_token":"","sunshine_endpoint":"https://127.0.0.1:47990/","sunshine_username":"old","sunshine_password":"old-secret"}});
     store
         .put("identity.json", &serde_json::to_vec(&identity).unwrap())
         .unwrap();
@@ -88,9 +88,7 @@ fn credentials_update_preserves_binding_credential_and_execution_journal() {
     let (exit, result) = call(
         &state,
         &["credentials", "update", "--input-stdin"],
-        Some(
-            r#"{"sunshine_username":"new","sunshine_password":"new-secret","use_system_trust":true}"#,
-        ),
+        Some(r#"{"sunshine_username":"new","sunshine_password":"new-secret"}"#),
     );
     assert_eq!(exit, 0, "{result}");
     assert!(!result.to_string().contains("new-secret"));
@@ -100,7 +98,7 @@ fn credentials_update_preserves_binding_credential_and_execution_journal() {
     assert_eq!(current["binding"], binding);
     assert_eq!(current["credential"], identity["credential"]);
     assert_eq!(current["config"]["sunshine_password"], "new-secret");
-    assert!(current["config"]["sunshine_certificate"].is_null());
+    assert!(current["config"].get("sunshine_certificate").is_none());
     assert_eq!(
         fs::read(state.join("journal/evidence")).unwrap(),
         b"unchanged execution facts"
