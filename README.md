@@ -2,9 +2,9 @@
 
 Sunshine 的独立本机管理代理，公开入口为 `sunshine-client`。不处理视频流、不安装 Sunshine，也不索取屏幕录制或输入控制权限；Windows/Linux 可通过固定服务适配器控制已安装的 Sunshine 服务。
 
-当前纯 CLI 与系统服务版本为 `0.2.1`，只接受 `sunshine-management/2` 与 Sunshine `v2026.914.233613`。安装产物未签名、未公证，实机与升级验收边界见发行说明。
+当前纯 CLI 与系统服务版本为 `0.2.2`，只接受 `sunshine-management/2` 与 Sunshine `v2026.914.233613`。安装产物未签名、未公证，实机与升级验收边界见发行说明。
 
-公共 CLI 输出、受保护输入、系统服务生命周期和本地只读状态通道来自 Client Foundation 0.9.10；本仓只
+公共 CLI 输出、受保护输入、系统服务生命周期和本地只读状态通道来自 Client Foundation 0.9.11；本仓只
 保留 Sunshine 配对、本机配置访问、任务执行及结果确认。Manager 连接始终执行标准 WebPKI 身份校验和设备凭据认证；本机 Sunshine 连接仅允许 HTTPS 回环 IP、禁用代理与重定向，并使用 Sunshine API 用户名和密码认证。
 
 支持 Windows x64、Linux x64 和 macOS Apple Silicon（arm64）。不再为 Intel macOS 适配、运行 CI 或提供发行包。

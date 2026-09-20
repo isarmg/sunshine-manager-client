@@ -18,6 +18,121 @@ const MAX_SUNSHINE_USERNAME_BYTES: usize = 256;
 const MAX_SUNSHINE_PASSWORD_BYTES: usize = 4_096;
 const MAX_CONFIRMATION_BYTES: usize = 16;
 
+struct SunshineErrorCatalog;
+
+impl ProductErrorCatalog for SunshineErrorCatalog {
+    fn message(&self, code: &'static str) -> Option<&'static str> {
+        match code {
+            "awaiting_configuration" => Some("Sunshine Client has not been configured."),
+            "awaiting_pairing" => Some("Sunshine Client has not completed Manager pairing."),
+            "active_setup_input_requires_pair_replace"
+            | "binding_replacement_requires_pair_replace" => Some(
+                "This Sunshine Client is already bound; replacement requires the explicit pair replace workflow.",
+            ),
+            "credential_rejected" => Some(
+                "Sunshine Manager rejected the instance authorization code or client credential.",
+            ),
+            "invalid_server_origin" => {
+                Some("The Sunshine Manager address must be a valid HTTPS origin.")
+            }
+            "no_pairing_transaction" => {
+                Some("There is no saved Sunshine Manager pairing transaction to resume.")
+            }
+            "pairing_endpoint_not_found" => Some(
+                "The configured Sunshine Manager does not expose the required pairing endpoint.",
+            ),
+            "pairing_http_method_rejected" => {
+                Some("Sunshine Manager or its reverse proxy rejected the pairing HTTP method.")
+            }
+            "pairing_server_upgrade_required" => {
+                Some("Sunshine Manager requires a different current pairing contract.")
+            }
+            "pairing_request_rejected" => Some("Sunshine Manager rejected the pairing request."),
+            "pairing_unexpected_http_status" => {
+                Some("Sunshine Manager returned an unexpected pairing HTTP status.")
+            }
+            "unsupported_protocol_or_platform" => Some(
+                "Sunshine Client and Manager do not support the same current protocol or platform.",
+            ),
+            "server_unavailable" => Some(
+                "Sunshine Manager could not be reached or its TLS identity could not be trusted.",
+            ),
+            "pairing_postcondition_unconfirmed" | "pairing_result_uncertain" => {
+                Some("Manager pairing returned without a durable active Sunshine Client identity.")
+            }
+            "server_replacement_requires_pair_replace"
+            | "server_replacement_requires_retirement" => Some(
+                "Changing Sunshine Manager requires the explicit binding replacement workflow.",
+            ),
+            "invalid_sunshine_configuration" => {
+                Some("Local Sunshine must use an HTTPS loopback IP and valid local credentials.")
+            }
+            "sunshine_credentials_rejected" => {
+                Some("Local Sunshine rejected its Basic Authentication credentials.")
+            }
+            "sunshine_api_unavailable" | "sunshine_probe_timeout" => {
+                Some("The local loopback Sunshine HTTPS API is unavailable.")
+            }
+            "sunshine_version_unsupported" => {
+                Some("The installed local Sunshine version is unsupported.")
+            }
+            "sunshine_resource_conflict" => {
+                Some("Local Sunshine changed while the requested resource was being updated.")
+            }
+            "sunshine_capability_unavailable" => {
+                Some("Local Sunshine does not expose the requested management capability.")
+            }
+            _ => None,
+        }
+    }
+
+    fn next_step(&self, product: &str, error: &Failure) -> Option<String> {
+        match error.code {
+            "awaiting_configuration" | "awaiting_pairing" | "no_pairing_transaction" => Some(
+                format!("Run `{product} setup --interactive` to configure and pair this client."),
+            ),
+            "credential_rejected" => Some(format!(
+                "Create or rotate this Sunshine instance authorization code, then run `{product} setup --interactive`."
+            )),
+            "invalid_server_origin"
+            | "pairing_postcondition_unconfirmed"
+            | "pairing_result_uncertain" => Some(format!(
+                "Check the Manager address and instance code, then run `{product} setup --interactive`."
+            )),
+            "server_unavailable" => Some(format!(
+                "Check the Sunshine Manager URL, TLS certificate and network, then retry `{product} setup`."
+            )),
+            "pairing_endpoint_not_found" | "pairing_http_method_rejected" => Some(
+                "Check the Sunshine Manager address and reverse-proxy routing, then retry Setup."
+                    .into(),
+            ),
+            "pairing_server_upgrade_required" | "unsupported_protocol_or_platform" => Some(
+                "Upgrade the older Sunshine Client or Manager to the same current contract.".into(),
+            ),
+            "invalid_sunshine_configuration"
+            | "sunshine_credentials_rejected"
+            | "sunshine_api_unavailable"
+            | "sunshine_probe_timeout" => Some(format!(
+                "Check the local loopback Sunshine HTTPS endpoint and credentials, then run `{product} doctor --sunshine`."
+            )),
+            "sunshine_version_unsupported" | "sunshine_capability_unavailable" => {
+                Some("Upgrade local Sunshine to a supported current version.".into())
+            }
+            _ => None,
+        }
+    }
+}
+
+fn emit_sunshine(command: &str, format: &str, result: &Result<Value>) -> u8 {
+    emit(
+        "sunshine-client",
+        command,
+        format,
+        result,
+        &SunshineErrorCatalog,
+    )
+}
+
 fn default_state() -> PathBuf {
     PathBuf::from(if cfg!(windows) {
         r"C:\ProgramData\SunshineClient"
@@ -764,7 +879,7 @@ fn no_args(args: &Args) -> u8 {
             "sunshine-client logs"
         ]);
     }
-    emit("sunshine-client", "status", &args.format, &result)
+    emit_sunshine("status", &args.format, &result)
 }
 
 pub fn entry(raw: Vec<String>) -> u8 {
@@ -777,7 +892,7 @@ pub fn entry(raw: Vec<String>) -> u8 {
         &["--network", "--sunshine"],
     ) {
         Ok(a) => a,
-        Err(e) => return emit("sunshine-client", "parse", parse_format, &Err(e)),
+        Err(e) => return emit_sunshine("parse", parse_format, &Err(e)),
     };
     // Help and version are read-only and must remain available without UAC.
     if args.has("--help") {
@@ -818,7 +933,7 @@ pub fn entry(raw: Vec<String>) -> u8 {
                 }
                 return exit;
             }
-            Err(error) => return emit("sunshine-client", "setup", &args.format, &Err(error)),
+            Err(error) => return emit_sunshine("setup", &args.format, &Err(error)),
         }
     }
     if args.words.is_empty() && !args.has("--version") {
@@ -826,19 +941,17 @@ pub fn entry(raw: Vec<String>) -> u8 {
     }
     if args.has("--follow") {
         if args.words != ["logs"] || args.format != "ndjson" {
-            return emit(
-                "sunshine-client",
+            return emit_sunshine(
                 "logs",
                 &args.format,
                 &Err(fail(2, "follow_requires_logs_ndjson")),
             );
         }
-        return follow_logs("sunshine-client", &service(), args);
+        return follow_logs("sunshine-client", &service(), args, &SunshineErrorCatalog);
     }
     if args.has("--watch") {
         if args.words != ["status"] || args.format != "ndjson" {
-            return emit(
-                "sunshine-client",
+            return emit_sunshine(
                 "status",
                 &args.format,
                 &Err(fail(2, "watch_requires_status_ndjson")),
@@ -850,7 +963,7 @@ pub fn entry(raw: Vec<String>) -> u8 {
     }
     let command = args.words.join(" ");
     let result = execute(&args);
-    let exit = emit("sunshine-client", &command, &args.format, &result);
+    let exit = emit_sunshine(&command, &args.format, &result);
     #[cfg(windows)]
     if args.words == ["setup"]
         && args.has("--installer-session")
@@ -1170,7 +1283,7 @@ fn watch(args: &Args) -> u8 {
         Err(_) => return 8,
     };
     rt.block_on(async {let deadline=tokio::time::Instant::now()+args.timeout;loop {
-        let result=execute(args);let code=emit("sunshine-client","status","ndjson",&result);if code!=0 {return code;}
+        let result=execute(args);let code=emit_sunshine("status","ndjson",&result);if code!=0 {return code;}
         tokio::select!{_=tokio::signal::ctrl_c()=>return 130,_=tokio::time::sleep_until(deadline)=>return 0,_=tokio::time::sleep(std::time::Duration::from_secs(1))=>{}}
     }})
 }
@@ -1188,6 +1301,18 @@ fn validate_settings(settings: &Settings) -> Result<()> {
 #[cfg(test)]
 mod setup_tests {
     use super::*;
+
+    #[test]
+    fn sunshine_owns_manager_and_local_api_error_presentation() {
+        assert_eq!(
+            SunshineErrorCatalog.message("pairing_endpoint_not_found"),
+            Some("The configured Sunshine Manager does not expose the required pairing endpoint.")
+        );
+        assert_eq!(
+            SunshineErrorCatalog.message("sunshine_credentials_rejected"),
+            Some("Local Sunshine rejected its Basic Authentication credentials.")
+        );
+    }
 
     #[test]
     fn startup_policy_requires_a_verified_platform_state() {

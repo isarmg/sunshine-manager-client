@@ -1,6 +1,6 @@
 # 各平台安装、配置与覆盖升级
 
-适用于 0.2.1。Client 是管理代理；需要先安装 Sunshine 并在其 Web UI 设置用户名、密码。Manager 地址、Manager 配对码、Sunshine 本机地址和 Sunshine 管理凭据是不同的输入。每个平台只发布一个原生安装包，安装器检查平台/架构/权限、注册服务，然后由 `setup` 完成配置。
+适用于 0.2.2。Client 是管理代理；需要先安装 Sunshine 并在其 Web UI 设置用户名、密码。Manager 地址、Manager 配对码、Sunshine 本机地址和 Sunshine 管理凭据是不同的输入。每个平台只发布一个原生安装包，安装器检查平台/架构/权限、注册服务，然后由 `setup` 完成配置。
 
 ## Windows 11 x64
 
@@ -8,7 +8,7 @@
 
 ```powershell
 $client = "$env:ProgramFiles\SunshineClient\sunshine-client.exe"
-msiexec.exe /i .\sunshine-client-0.2.1-windows-x64.msi /norestart
+msiexec.exe /i .\sunshine-client-0.2.2-windows-x64.msi /norestart
 ```
 
 MSI 只安装程序并登记 Manual/Stopped 服务，不启动配对，也不读取任何秘密。安装完成后，在管理员终端显式运行 `& "$env:ProgramFiles\SunshineClient\sunshine-client.exe" setup --interactive`；原有 CLI 会在需要写入受保护状态时请求提权，`--help` 和 `--version` 不触发 UAC。配对失败不会回滚已提交的安装。
@@ -17,18 +17,18 @@ MSI 只安装程序并登记 Manual/Stopped 服务，不启动配对，也不读
 
 已有版本直接再次运行同一 MSI；原生安装器处理升级、修复、降级检查和服务登记，保留设备身份、凭据、任务记录及启动意图。需要再次设置时运行 `sunshine-client setup` 会复用有效身份或恢复未完成事务，不会强制重新配对。
 
-MSI 同版文件修复：`msiexec.exe /i "完整路径\sunshine-client-0.2.1-windows-x64.msi" REINSTALL=ALL REINSTALLMODE=amus /l*v "%TEMP%\sunshine-client-install.log"`（在 cmd 中执行）。安装器忙碌时等待其他安装结束；3010 表示 Windows 需要重启完成替换。使用 `Get-Service SunshineClient` 和 `sunshine-client service status` 检查服务。
+MSI 同版文件修复：`msiexec.exe /i "完整路径\sunshine-client-0.2.2-windows-x64.msi" REINSTALL=ALL REINSTALLMODE=amus /l*v "%TEMP%\sunshine-client-install.log"`（在 cmd 中执行）。安装器忙碌时等待其他安装结束；3010 表示 Windows 需要重启完成替换。使用 `Get-Service SunshineClient` 和 `sunshine-client service status` 检查服务。
 
 ## Ubuntu 24.04 x86_64
 
 ```sh
-sudo apt install ./sunshine-client_0.2.1_amd64.deb
+sudo apt install ./sunshine-client_0.2.2_amd64.deb
 sudo sunshine-client setup
 ```
 
 默认配置与状态位于 `/var/lib/sunshine-client`，运行账户 `sunshine-client`。安装后运行 `sudo sunshine-client setup`，按提示选择开机启动、立即启动并验证连接。日志：`sudo journalctl -u sunshine-client.service -n 100 --no-pager`。
 
-同版损坏执行 `sudo apt install --reinstall ./sunshine-client_0.2.1_amd64.deb`。0.2.1 不读取 v1 Bootstrap/协议状态；安装后使用当前输入重新运行 `sudo sunshine-client setup`。若安装器没有交互终端，稍后手动运行该命令。
+同版损坏执行 `sudo apt install --reinstall ./sunshine-client_0.2.2_amd64.deb`。0.2.2 不读取 v1 Bootstrap/协议状态；安装后使用当前输入重新运行 `sudo sunshine-client setup`。若安装器没有交互终端，稍后手动运行该命令。
 
 手工归档只包含可执行文件、文档和校验元数据，不包含 Shell/Python 安装包装脚本；生产安装和覆盖请使用 DEB。解压的可执行文件可用于临时诊断，但不替代原生服务安装器。
 
@@ -37,7 +37,7 @@ sudo sunshine-client setup
 只提供 Apple Silicon 原生 PKG，不提供 Intel 版本：
 
 ```sh
-sudo installer -pkg ./sunshine-client-0.2.1-macos-arm64-unsigned.pkg -target /
+sudo installer -pkg ./sunshine-client-0.2.2-macos-arm64-unsigned.pkg -target /
 sudo /usr/local/bin/sunshine-client setup
 ```
 

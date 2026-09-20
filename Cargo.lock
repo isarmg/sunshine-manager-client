@@ -1188,8 +1188,8 @@ dependencies = [
 
 [[package]]
 name = "sarmg-client-cli"
-version = "0.9.10"
-source = "git+https://github.com/isarmg/sarmg-foundation-client.git?rev=c081f5c3b5d5f6e74f029d03dd7d98cb5d88a456#c081f5c3b5d5f6e74f029d03dd7d98cb5d88a456"
+version = "0.9.11"
+source = "git+https://github.com/isarmg/sarmg-foundation-client.git?rev=60745fa5d69712300bb1e511d9bfe70293bd230f#60745fa5d69712300bb1e511d9bfe70293bd230f"
 dependencies = [
  "libc",
  "serde",
@@ -1203,8 +1203,8 @@ dependencies = [
 
 [[package]]
 name = "sarmg-client-fs-safety"
-version = "0.9.10"
-source = "git+https://github.com/isarmg/sarmg-foundation-client.git?rev=c081f5c3b5d5f6e74f029d03dd7d98cb5d88a456#c081f5c3b5d5f6e74f029d03dd7d98cb5d88a456"
+version = "0.9.11"
+source = "git+https://github.com/isarmg/sarmg-foundation-client.git?rev=60745fa5d69712300bb1e511d9bfe70293bd230f#60745fa5d69712300bb1e511d9bfe70293bd230f"
 dependencies = [
  "getrandom 0.4.3",
  "libc",
@@ -1214,8 +1214,8 @@ dependencies = [
 
 [[package]]
 name = "sarmg-client-runtime"
-version = "0.9.10"
-source = "git+https://github.com/isarmg/sarmg-foundation-client.git?rev=c081f5c3b5d5f6e74f029d03dd7d98cb5d88a456#c081f5c3b5d5f6e74f029d03dd7d98cb5d88a456"
+version = "0.9.11"
+source = "git+https://github.com/isarmg/sarmg-foundation-client.git?rev=60745fa5d69712300bb1e511d9bfe70293bd230f#60745fa5d69712300bb1e511d9bfe70293bd230f"
 dependencies = [
  "async-trait",
  "getrandom 0.4.3",
@@ -1234,8 +1234,8 @@ dependencies = [
 
 [[package]]
 name = "sarmg-client-secret"
-version = "0.9.10"
-source = "git+https://github.com/isarmg/sarmg-foundation-client.git?rev=c081f5c3b5d5f6e74f029d03dd7d98cb5d88a456#c081f5c3b5d5f6e74f029d03dd7d98cb5d88a456"
+version = "0.9.11"
+source = "git+https://github.com/isarmg/sarmg-foundation-client.git?rev=60745fa5d69712300bb1e511d9bfe70293bd230f#60745fa5d69712300bb1e511d9bfe70293bd230f"
 dependencies = [
  "zeroize",
 ]
@@ -1411,7 +1411,7 @@ checksum = "13c2bddecc57b384dee18652358fb23172facb8a2c51ccc10d74c157bdea3292"
 
 [[package]]
 name = "sunshine-client"
-version = "0.2.1"
+version = "0.2.2"
 dependencies = [
  "async-trait",
  "base64 0.22.1",
