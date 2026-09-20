@@ -33,6 +33,9 @@
         <Component Id="PreserveDataSelection" Guid="1AC45A4E-B558-47F6-96D4-5CA0BA55F90B" Bitness="always64">
           <RegistryValue Root="HKLM" Key="Software\sarmg\Sunshine Client" Name="PreserveData" Type="integer" Value="1" KeyPath="yes" />
         </Component>
+        <Component Id="PrepareSetupSelection" Guid="8AB18773-F311-4D05-982B-78472DB87CC5" Bitness="always64">
+          <RegistryValue Root="HKLM" Key="Software\sarmg\Sunshine Client" Name="PrepareSetup" Type="integer" Value="1" KeyPath="yes" />
+        </Component>
       </Directory>
     </StandardDirectory>
     <StandardDirectory Id="ProgramMenuFolder" />
@@ -44,12 +47,17 @@
       <Feature Id="PreserveData" Title="Retain existing execution data" Description="Keep the durable execution journal. Deselect to validate and permanently remove it." Level="1" AllowAbsent="yes">
         <ComponentRef Id="PreserveDataSelection" />
       </Feature>
+      <Feature Id="PrepareSetup" Title="Prepare incompatible account data for Setup (recommended)" Description="Archive only incompatible or malformed pairing/account records so ordinary Setup can create a current v2 account. Compatible accounts and the execution journal are preserved." Level="1" AllowAbsent="yes">
+        <ComponentRef Id="PrepareSetupSelection" />
+      </Feature>
     </Feature>
+    <CustomAction Id="PrepareSetupState" FileRef="ClientExe" ExeCommand="installer prepare-setup" Execute="commit" Impersonate="no" Return="check" />
     <CustomAction Id="ResetOldConfiguration" FileRef="ClientExe" ExeCommand="installer reset-configuration" Execute="deferred" Impersonate="no" Return="check" />
     <CustomAction Id="ResetOldData" FileRef="ClientExe" ExeCommand="installer reset-data" Execute="deferred" Impersonate="no" Return="check" />
     <InstallExecuteSequence>
       <Custom Action="ResetOldConfiguration" After="InstallFiles" Condition="NOT Installed AND &amp;PreserveConfiguration &lt;&gt; 3" />
       <Custom Action="ResetOldData" After="ResetOldConfiguration" Condition="NOT Installed AND &amp;PreserveData &lt;&gt; 3" />
+      <Custom Action="PrepareSetupState" After="ResetOldData" Condition="NOT REMOVE~=&quot;ALL&quot; AND &amp;PrepareSetup = 3" />
     </InstallExecuteSequence>
     <!-- Pairing is an explicit post-install CLI action; MSI never opens an interactive wizard. -->
   </Package>

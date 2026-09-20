@@ -12,13 +12,13 @@ $installRoot = (Get-ItemProperty 'HKLM:\Software\sarmg\Sunshine Client').Install
 $client = Join-Path $installRoot 'sunshine-client.exe'
 ```
 
-MSI 只安装程序并登记 Manual/Stopped 服务，不启动配对，也不读取任何秘密。安装完成后，在管理员终端显式运行 `& $client setup --interactive`；原有 CLI 会在需要写入受保护状态时请求提权，`--help` 和 `--version` 不触发 UAC。配对失败不会回滚已提交的安装。
+MSI 只安装程序并登记 Manual/Stopped 服务，不启动配对，也不读取任何秘密。默认选中的“Prepare incompatible account data for Setup (recommended)”会先只读验证执行日志，再把不兼容或损坏的 `identity.json` / `bootstrap.json` 归档为唯一名称（包括可识别的 v1 文档）；当前 v2 账户保持不变，执行日志永不由该选项删除。安装完成后，在管理员终端显式运行 `& $client setup --interactive` 即可创建当前账户；原有 CLI 会在需要写入受保护状态时请求提权，`--help` 和 `--version` 不触发 UAC。配对失败不会回滚已提交的安装。
 
 交互输入 Manager 管理台生成的配对码、`https://127.0.0.1:47990/`、Sunshine Web UI 用户名和密码。默认服务账户 LocalSystem，状态目录 `C:\ProgramData\SunshineClient`。MSI 会把用户选择的程序目录事务性追加到机器 PATH；新终端可直接运行 `sunshine-client`，卸载会移除该安装器拥有的 PATH 项。
 
-已有版本直接再次运行同一 MSI；原生安装器处理升级、修复、降级检查和服务登记，保留设备身份、凭据、任务记录及启动意图。需要再次设置时运行 `sunshine-client setup` 会复用有效身份或恢复未完成事务，不会强制重新配对。
+已有版本直接再次运行同一 MSI；原生安装器处理升级、修复、降级检查和服务登记，保留设备身份、凭据、任务记录及启动意图。安装阶段归档不兼容账户后，只需运行普通 `sunshine-client setup` 并输入新的实例授权码；有效 v2 身份仍会直接复用，未完成事务仍会恢复。
 
-交互安装会进入“自定义安装”页：可以修改安装目录，并分别选择是否保留旧的 Manager/Sunshine 配置与配对凭据、是否保留旧的执行日志；两项默认保留，取消选择会在结构安全检查通过后永久清理对应类别。向导最终明确显示完成或失败，不会无提示退出。
+交互安装会进入“自定义安装”页：可以修改安装目录，并分别选择是否保留旧的 Manager/Sunshine 配置与配对凭据、是否保留旧的执行日志、是否为 Setup 准备不兼容账户；三项默认选中。取消前两项会在结构安全检查通过后永久清理对应类别；取消兼容性准备则完整保留旧账户，由管理员之后显式处理。向导最终明确显示完成或失败，不会无提示退出。
 
 MSI 同版文件修复：`msiexec.exe /i "完整路径\sunshine-client-0.2.5-windows-x64.msi" REINSTALL=ALL REINSTALLMODE=amus /l*v "%TEMP%\sunshine-client-install.log"`（在 cmd 中执行）。安装器忙碌时等待其他安装结束；3010 表示 Windows 需要重启完成替换。使用 `Get-Service SunshineClient` 和 `sunshine-client service status` 检查服务。
 

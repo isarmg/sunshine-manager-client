@@ -1128,12 +1128,18 @@ fn execute(args: &Args) -> Result<Value> {
         .unwrap_or_else(default_state);
     match words.as_slice() {
         #[cfg(windows)]
-        ["installer", action] if ["reset-configuration", "reset-data"].contains(action) => {
+        ["installer", action]
+            if ["prepare-setup", "reset-configuration", "reset-data"].contains(action) =>
+        {
             args.validate_options(&[])?;
             if path != default_state() {
                 return Err(fail(2, "installer_state_path_mismatch"));
             }
-            installer_reset(&path, action)
+            if *action == "prepare-setup" {
+                installer_prepare_setup(&path)
+            } else {
+                installer_reset(&path, action)
+            }
         }
         ["setup"] => {
             args.validate_options(&[
@@ -1409,6 +1415,64 @@ fn execute(args: &Args) -> Result<Value> {
     }
 }
 
+#[cfg(any(windows, test))]
+fn installer_prepare_setup(path: &Path) -> Result<Value> {
+    // The installer may repair account compatibility, but it must never make
+    // an incompatible durable execution journal disappear. Validate important
+    // data before taking the provisioning lock or archiving an account record.
+    ensure_execution_journal_compatible(path)?;
+    let provisioning = path.join("provisioning");
+    match std::fs::symlink_metadata(&provisioning) {
+        Err(error) if error.kind() == std::io::ErrorKind::NotFound => {
+            return Ok(json!({"prepared":true,"archived":[]}));
+        }
+        Err(error) => return Err(storage_error(error)),
+        Ok(_) => {}
+    }
+
+    let _guard = MaintenanceGuard::acquire(path)
+        .map_err(|error| storage_error(error).at_step("installer_maintenance_lock"))?;
+    let store = ProtectedState::open(&provisioning)
+        .map_err(|error| storage_error(error).at_step("installer_provisioning_open"))?;
+    let mut archived = Vec::new();
+    for (name, artifact) in [
+        ("identity.json", "identity"),
+        ("bootstrap.json", "bootstrap"),
+    ] {
+        let Some(bytes) = store
+            .read(name)
+            .map_err(|error| storage_error(error).at_step("installer_account_read"))?
+        else {
+            continue;
+        };
+        let compatibility = if name == "identity.json" {
+            provisioning::decode_identity(&Zeroizing::new(bytes)).map(|_| ())
+        } else {
+            provisioning::decode_bootstrap(&Zeroizing::new(bytes)).map(|_| ())
+        };
+        match compatibility {
+            Ok(()) => {}
+            Err(
+                ProvisionError::StateDocumentCorrupt { .. }
+                | ProvisionError::StateSchemaUnsupported { .. },
+            ) => {
+                let archive_name = format!(
+                    "{artifact}.incompatible-{}.json",
+                    uuid::Uuid::new_v4().simple()
+                );
+                store
+                    .archive(name, &archive_name)
+                    .map_err(|error| storage_error(error).at_step("installer_account_archive"))?;
+                archived.push(archive_name);
+            }
+            Err(error) => {
+                return Err(provision_error(error).at_step("installer_account_validation"));
+            }
+        }
+    }
+    Ok(json!({"prepared":true,"archived":archived,"important_data":"preserved"}))
+}
+
 #[cfg(windows)]
 fn installer_reset(path: &Path, action: &str) -> Result<Value> {
     let (target, category) = match action {
@@ -1630,5 +1694,74 @@ mod setup_tests {
             assert!(remove_installer_tree(&unsafe_tree).is_err());
             assert_eq!(std::fs::read(outside).unwrap(), b"must survive");
         }
+    }
+
+    #[test]
+    fn installer_preparation_archives_only_incompatible_account_documents() {
+        let directory = tempfile::tempdir().unwrap();
+        let root = directory.path().join("client");
+        crate::storage::prepare_root(&root).unwrap();
+        let provisioning = root.join("provisioning");
+        {
+            let store = ProtectedState::open(&provisioning).unwrap();
+            let legacy = br#"{"manager_endpoint":"https://manager.example/sunshine-client/v1/"}"#;
+            store.put("identity.json", legacy).unwrap();
+            store.put("bootstrap.json", legacy).unwrap();
+        }
+        let result = installer_prepare_setup(&root).unwrap();
+        let archived = result["archived"].as_array().unwrap();
+        assert_eq!(archived.len(), 2);
+        let store = ProtectedState::open_readonly(&provisioning).unwrap();
+        assert!(store.read("identity.json").unwrap().is_none());
+        assert!(store.read("bootstrap.json").unwrap().is_none());
+        for name in archived {
+            assert!(
+                store
+                    .read(name.as_str().expect("archive name"))
+                    .unwrap()
+                    .is_some()
+            );
+        }
+    }
+
+    #[test]
+    fn installer_preparation_preserves_account_when_important_data_is_invalid() {
+        let directory = tempfile::tempdir().unwrap();
+        let root = directory.path().join("client");
+        crate::storage::prepare_root(&root).unwrap();
+        let provisioning = root.join("provisioning");
+        {
+            let store = ProtectedState::open(&provisioning).unwrap();
+            store
+                .put(
+                    "identity.json",
+                    br#"{"manager_endpoint":"https://manager.example/sunshine-client/v1/"}"#,
+                )
+                .unwrap();
+        }
+        std::fs::write(root.join("journal"), b"not a journal directory").unwrap();
+
+        let failure = installer_prepare_setup(&root).unwrap_err();
+        assert_eq!(failure.code, "important_state_incompatible");
+        let store = ProtectedState::open_readonly(&provisioning).unwrap();
+        assert!(store.read("identity.json").unwrap().is_some());
+    }
+
+    #[test]
+    fn installer_preparation_leaves_current_account_documents_unchanged() {
+        let directory = tempfile::tempdir().unwrap();
+        let root = directory.path().join("client");
+        crate::storage::prepare_root(&root).unwrap();
+        let provisioning = root.join("provisioning");
+        let current = br#"{"manager_endpoint":"wss://manager.example/sunshine-client/v2/connect","enrollment_token":"token","sunshine_endpoint":"https://127.0.0.1:47990/","sunshine_username":"sunshine","sunshine_password":"password"}"#;
+        {
+            let store = ProtectedState::open(&provisioning).unwrap();
+            store.put("bootstrap.json", current).unwrap();
+        }
+
+        let result = installer_prepare_setup(&root).unwrap();
+        assert_eq!(result["archived"], json!([]));
+        let store = ProtectedState::open_readonly(&provisioning).unwrap();
+        assert_eq!(store.read("bootstrap.json").unwrap().unwrap(), current);
     }
 }

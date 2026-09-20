@@ -28,10 +28,16 @@ class InstallerTests(unittest.TestCase):
         self.assertEqual(install_location.get('Value'), '[INSTALLFOLDER]')
         features = {feature.get('Id'): feature for feature in tree.findall('.//w:Feature', ns)}
         self.assertEqual(features['PreserveConfiguration'].get('AllowAbsent'), 'yes')
+        self.assertEqual(features['PrepareSetup'].get('AllowAbsent'), 'yes')
         self.assertEqual(features['PreserveData'].get('AllowAbsent'), 'yes')
         actions = {action.get('Id'): action for action in tree.findall('.//w:CustomAction', ns)}
         self.assertEqual(actions['ResetOldConfiguration'].get('ExeCommand'), 'installer reset-configuration')
         self.assertEqual(actions['ResetOldData'].get('ExeCommand'), 'installer reset-data')
+        self.assertEqual(actions['PrepareSetupState'].get('ExeCommand'), 'installer prepare-setup')
+        self.assertEqual(actions['PrepareSetupState'].get('Execute'), 'commit')
+        self.assertEqual(actions['PrepareSetupState'].get('Return'), 'check')
+        self.assertEqual(actions['PrepareSetupState'].get('FileRef'), 'ClientExe')
+        self.assertEqual(actions['PrepareSetupState'].get('Impersonate'), 'no')
         self.assertEqual(actions['ResetOldConfiguration'].get('Return'), 'check')
         self.assertEqual(actions['ResetOldData'].get('Return'), 'check')
         sequence = {
@@ -40,6 +46,12 @@ class InstallerTests(unittest.TestCase):
         }
         self.assertIn('&PreserveConfiguration <> 3', sequence['ResetOldConfiguration'])
         self.assertIn('&PreserveData <> 3', sequence['ResetOldData'])
+        self.assertIn('&PrepareSetup = 3', sequence['PrepareSetupState'])
+        self.assertEqual(
+            next(custom for custom in tree.findall('.//w:InstallExecuteSequence/w:Custom', ns)
+                 if custom.get('Action') == 'PrepareSetupState').get('After'),
+            'ResetOldData',
+        )
         path_entry = tree.find('.//w:Environment[@Name="PATH"]', ns)
         self.assertIsNotNone(path_entry)
         self.assertEqual(path_entry.get('Value'), '[INSTALLFOLDER]')
