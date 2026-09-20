@@ -1,0 +1,12 @@
+format = 1
+product_id = "sunshine-manager"
+source_roots = ["."]
+
+[foundation]
+platform_generation = 1
+version = "0.9.13"
+
+[[components]]
+id = "client"
+profile = "desktop-client"
+capabilities = ["private-state", "https-delivery", "doctor", "authenticated-local-status", "desktop-cli-lifecycle", "protected-terminal-input"]

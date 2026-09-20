@@ -7,7 +7,7 @@
 |---|---|
 | Manager 协议 | 仅 `sunshine-management/2`；不协商 v1 |
 | Sunshine | 仅 `v2026.914.233613` |
-| Client Foundation | `0.9.11`，固定提交 `60745fa5d69712300bb1e511d9bfe70293bd230f` |
+| Client Foundation | `0.9.13`，固定提交 `995331aa56a9373df0eb090d017532273f00d6ac` |
 | Bootstrap | 当前严格字段；旧 `restart_allowed`、应用权限和服务模式字段会被拒绝 |
 | 能力 | 配对后直接启用 Sunshine 专用能力；服务控制按平台固定适配器声明 |
 | IPC | Foundation `GetStatus/1`，进程世代、安装身份和配置修订校验 |
