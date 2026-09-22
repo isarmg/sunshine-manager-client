@@ -1,6 +1,6 @@
 # Sunshine Client 配置指南
 
-本文适用于 `sunshine-client` `0.2.7`。Client 必须先连接本机 Sunshine，再与 Sunshine Manager 配对；以下命令不会安装 Sunshine。
+本文适用于 `sunshine-client` `0.2.8`。Client 必须先连接本机 Sunshine，再与 Sunshine Manager 配对；以下命令不会安装 Sunshine。
 
 ## 1. 前置条件与状态目录
 
