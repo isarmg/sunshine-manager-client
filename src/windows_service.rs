@@ -30,7 +30,9 @@ fn service_failure(error: &sunshine_client::provisioning::ProvisionError) -> Ser
         | ProvisionError::StateDocumentCorrupt { .. }
         | ProvisionError::StateSchemaUnsupported { .. }
         | ProvisionError::Journal => ServiceFailure::ProtectedState,
-        ProvisionError::Configuration | ProvisionError::Unpaired => ServiceFailure::Configuration,
+        ProvisionError::Configuration
+        | ProvisionError::InvalidAuthorizationCode
+        | ProvisionError::Unpaired => ServiceFailure::Configuration,
         ProvisionError::SunshineApiUnavailable => ServiceFailure::LocalSunshineUnavailable,
         ProvisionError::SunshineCredentialsRejected => {
             ServiceFailure::LocalSunshineCredentialsRejected

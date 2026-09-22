@@ -1441,7 +1441,7 @@ dependencies = [
 [[package]]
 name = "sunshine-client-protocol"
 version = "0.2.0"
-source = "git+https://github.com/isarmg/sunshine-manager-server.git?rev=dc1ce5912422baa3e52c369c2ce70572e91a656a#dc1ce5912422baa3e52c369c2ce70572e91a656a"
+source = "git+https://github.com/isarmg/sunshine-manager-server.git?rev=3501d1eebd5ad16abb52c9901cbef745a1d53afb#3501d1eebd5ad16abb52c9901cbef745a1d53afb"
 dependencies = [
  "serde",
  "serde_json",

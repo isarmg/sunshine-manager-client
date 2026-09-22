@@ -11,6 +11,7 @@ use serde::{Deserialize, Serialize};
 use std::{path::Path, sync::Arc, time::Duration};
 use sunshine_client_protocol::{
     Binding, Capabilities, ClientOs, Effectiveness, PROTOCOL, SUNSHINE_VERSION,
+    is_valid_authorization_code,
 };
 use tokio::sync::watch;
 use url::Url;
@@ -46,6 +47,8 @@ pub enum ProvisionError {
     Storage(#[from] StorageError),
     #[error("invalid protected bootstrap configuration")]
     Configuration,
+    #[error("invalid Sunshine instance authorization code")]
+    InvalidAuthorizationCode,
     #[error("protected state document is malformed")]
     StateDocumentCorrupt { artifact: &'static str },
     #[error("protected state uses an unsupported schema")]
@@ -157,8 +160,8 @@ pub(crate) fn pending_retry(config: &[u8], identity: &[u8]) -> bool {
 
 impl Bootstrap {
     pub(crate) fn validate(&self) -> Result<(), ProvisionError> {
-        if self.enrollment_token.len() != 64 {
-            return Err(ProvisionError::Configuration);
+        if !is_valid_authorization_code(&self.enrollment_token) {
+            return Err(ProvisionError::InvalidAuthorizationCode);
         }
         ManagerConnection::new(&self.manager_endpoint, Zeroizing::new("a".repeat(64)))?;
         self.adapter()?;
@@ -503,7 +506,7 @@ pub async fn run(state_path: &Path, shutdown: watch::Receiver<bool>) -> Result<(
 mod bootstrap_tests {
     use super::ProvisionError;
     fn configuration() -> serde_json::Value {
-        serde_json::json!({"manager_endpoint":"wss://manager.example.org/sunshine-client/v2/connect", "enrollment_token":"a".repeat(64),
+        serde_json::json!({"manager_endpoint":"wss://manager.example.org/sunshine-client/v2/connect", "enrollment_token":"a".repeat(sunshine_client_protocol::AUTHORIZATION_CODE_LENGTH),
             "sunshine_endpoint":"https://127.0.0.1:47990/", "sunshine_username":"fixture", "sunshine_password":"local-only"})
     }
     #[test]
@@ -528,10 +531,24 @@ mod bootstrap_tests {
     }
 
     #[test]
+    fn bootstrap_uses_the_manager_authorization_code_contract() {
+        let mut config = configuration();
+        assert!(super::validate_bootstrap(&serde_json::to_vec(&config).unwrap()).is_ok());
+
+        for invalid in ["a".repeat(35), "a".repeat(64), "A".repeat(36)] {
+            config["enrollment_token"] = serde_json::json!(invalid);
+            assert!(matches!(
+                super::validate_bootstrap(&serde_json::to_vec(&config).unwrap()),
+                Err(ProvisionError::InvalidAuthorizationCode)
+            ));
+        }
+    }
+
+    #[test]
     fn legacy_bootstrap_is_rejected_as_unsupported_without_migration() {
         let legacy = serde_json::json!({
             "manager_endpoint": "wss://manager.example.org/sunshine-client/v1/connect",
-            "enrollment_token": "a".repeat(64),
+            "enrollment_token": "a".repeat(sunshine_client_protocol::AUTHORIZATION_CODE_LENGTH),
             "sunshine_endpoint": "https://127.0.0.1:47990/",
             "sunshine_username": "fixture",
             "sunshine_password": "secret",
@@ -566,7 +583,8 @@ mod bootstrap_tests {
             &bytes,
             &serde_json::to_vec(&identity).unwrap()
         ));
-        identity["config"]["enrollment_token"] = serde_json::json!("c".repeat(64));
+        identity["config"]["enrollment_token"] =
+            serde_json::json!("c".repeat(sunshine_client_protocol::AUTHORIZATION_CODE_LENGTH));
         assert!(!super::pending_retry(
             &bytes,
             &serde_json::to_vec(&identity).unwrap()

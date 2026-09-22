@@ -13,7 +13,7 @@ use std::{
 use zeroize::Zeroizing;
 
 const MAX_URL_BYTES: usize = 2_048;
-const MAX_AUTHORIZATION_CODE_BYTES: usize = 64;
+const MAX_AUTHORIZATION_CODE_BYTES: usize = sunshine_client_protocol::AUTHORIZATION_CODE_LENGTH;
 const MAX_SUNSHINE_USERNAME_BYTES: usize = 256;
 const MAX_SUNSHINE_PASSWORD_BYTES: usize = 4_096;
 const MAX_CONFIRMATION_BYTES: usize = 16;
@@ -38,6 +38,9 @@ impl ProductErrorCatalog for SunshineErrorCatalog {
             "invalid_server_origin" => {
                 Some("The Sunshine Manager address must be a valid HTTPS origin.")
             }
+            "invalid_authorization_code" => Some(
+                "The Sunshine instance authorization code must be the exact 36-character code issued by the Manager.",
+            ),
             "no_pairing_transaction" => {
                 Some("There is no saved Sunshine Manager pairing transaction to resume.")
             }
@@ -110,6 +113,7 @@ impl ProductErrorCatalog for SunshineErrorCatalog {
                 "Create a new instance authorization code, then run `{product} pair replace --interactive`."
             )),
             "invalid_server_origin"
+            | "invalid_authorization_code"
             | "pairing_postcondition_unconfirmed"
             | "pairing_result_uncertain" => Some(format!(
                 "Check the Manager address and instance code, then run `{product} setup --interactive`."
@@ -214,6 +218,7 @@ fn storage_error(error: impl std::fmt::Debug + std::any::Any) -> Failure {
 fn provision_error(e: ProvisionError) -> Failure {
     match e {
         ProvisionError::Configuration => fail(2, "invalid_configuration"),
+        ProvisionError::InvalidAuthorizationCode => fail(2, "invalid_authorization_code"),
         ProvisionError::StateDocumentCorrupt { artifact } => fail(4, "pairing_state_incompatible")
             .with_detail(format!(
                 "artifact={artifact};detected=malformed;supported=sunshine-client-v2;preserved=true"
@@ -616,18 +621,23 @@ fn execute_pair(args: &Args, path: &Path) -> Result<Value> {
         return Err(fail(2, "resume_uses_existing_transaction"));
     }
     let incoming = if args.has("--interactive") {
+        let server = if let Some(server) = args.get("--server") {
+            server.into()
+        } else {
+            prompt_text("Server HTTPS origin", MAX_URL_BYTES, deadline)?
+        };
+        let authorization_code = Zeroizing::new(prompt_text(
+            "Authorization code (visible)",
+            MAX_AUTHORIZATION_CODE_BYTES,
+            deadline,
+        )?);
+        if !sunshine_client_protocol::is_valid_authorization_code(&authorization_code) {
+            return Err(fail(2, "invalid_authorization_code"));
+        }
         Some(
             PairInput {
-                server: if let Some(s) = args.get("--server") {
-                    s.into()
-                } else {
-                    prompt_text("Server HTTPS origin", MAX_URL_BYTES, deadline)?
-                },
-                authorization_code: Zeroizing::new(prompt_text(
-                    "Authorization code (visible)",
-                    MAX_AUTHORIZATION_CODE_BYTES,
-                    deadline,
-                )?),
+                server,
+                authorization_code,
                 sunshine_endpoint: prompt_text(
                     "Local Sunshine HTTPS URL",
                     MAX_URL_BYTES,
@@ -1599,6 +1609,12 @@ mod setup_tests {
         assert_eq!(
             SunshineErrorCatalog.message("sunshine_credentials_rejected"),
             Some("Local Sunshine rejected its Basic Authentication credentials.")
+        );
+        assert_eq!(
+            SunshineErrorCatalog.message("invalid_authorization_code"),
+            Some(
+                "The Sunshine instance authorization code must be the exact 36-character code issued by the Manager."
+            )
         );
     }
 

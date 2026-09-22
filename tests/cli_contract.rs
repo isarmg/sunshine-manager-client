@@ -125,7 +125,7 @@ fn legacy_pairing_state_is_identified_and_bad_journal_blocks_replacement() {
     let store = ProtectedState::open(&state.join("provisioning")).unwrap();
     let legacy = json!({
         "manager_endpoint": "wss://manager.example/sunshine-client/v1/connect",
-        "enrollment_token": "a".repeat(64),
+        "enrollment_token": "a".repeat(sunshine_client_protocol::AUTHORIZATION_CODE_LENGTH),
         "sunshine_endpoint": "https://127.0.0.1:47990/",
         "sunshine_username": "old",
         "sunshine_password": "old-secret",
@@ -147,7 +147,7 @@ fn legacy_pairing_state_is_identified_and_bad_journal_blocks_replacement() {
     );
     let replacement = json!({
         "server": "https://manager.example/",
-        "authorization_code": "b".repeat(64),
+        "authorization_code": "b".repeat(sunshine_client_protocol::AUTHORIZATION_CODE_LENGTH),
         "sunshine_endpoint": "https://127.0.0.1:47990/",
         "sunshine_username": "new",
         "sunshine_password": "new-secret"
