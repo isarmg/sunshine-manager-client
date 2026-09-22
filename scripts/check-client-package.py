@@ -126,7 +126,7 @@ def install_test(root, binary, temporary, installer=None, seed=None):
     fixture = temporary / "private-bootstrap"
     fixture.mkdir(mode=0o700)
     bootstrap = fixture / "bootstrap.json"
-    bootstrap.write_text(json.dumps({"manager_endpoint": "wss://127.0.0.1:9/sunshine-client/v2/connect", "enrollment_token": "a" * 64, "sunshine_endpoint": "https://127.0.0.1:47990/", "sunshine_username": "test", "sunshine_password": "installation-fixture-only"}), encoding="utf-8")
+    bootstrap.write_text(json.dumps({"manager_endpoint": "wss://127.0.0.1:9/sunshine-client/v2/connect", "enrollment_token": "a" * 36, "sunshine_endpoint": "https://127.0.0.1:47990/", "sunshine_username": "test", "sunshine_password": "installation-fixture-only"}), encoding="utf-8")
     bootstrap.chmod(0o600)
     if windows:
         # Protect only the secret fixture, not extracted executable/scripts. Set explicit
