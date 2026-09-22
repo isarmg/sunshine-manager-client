@@ -14,7 +14,7 @@ $client = Join-Path $installRoot 'sunshine-client.exe'
 
 MSI 只安装程序并登记 Manual/Stopped 服务，不启动配对，也不读取任何秘密。默认选中的“Prepare incompatible account data for Setup (recommended)”会先只读验证执行日志，再把不兼容或损坏的 `identity.json` / `bootstrap.json` 归档为唯一名称（包括可识别的 v1 文档）；当前 v2 账户保持不变，执行日志永不由该选项删除。安装完成后，在管理员终端显式运行 `& $client setup --interactive` 即可创建当前账户；原有 CLI 会在需要写入受保护状态时请求提权，`--help` 和 `--version` 不触发 UAC。配对失败不会回滚已提交的安装。
 
-交互输入 Manager 管理台生成的配对码、`https://127.0.0.1:47990/`、Sunshine Web UI 用户名和密码。默认服务账户 LocalSystem，状态目录 `C:\ProgramData\SunshineClient`。MSI 会把用户选择的程序目录事务性追加到机器 PATH；新终端可直接运行 `sunshine-client`，卸载会移除该安装器拥有的 PATH 项。
+交互输入 Manager 管理台生成的配对码、`https://127.0.0.1:47990/`、Sunshine Web UI 用户名和密码。Manager 配对码按普通文本在终端中明文回显，不提供遮罩或隐藏切换；Sunshine 密码仍隐藏输入。默认服务账户 LocalSystem，状态目录 `C:\ProgramData\SunshineClient`。MSI 会把用户选择的程序目录事务性追加到机器 PATH；新终端可直接运行 `sunshine-client`，卸载会移除该安装器拥有的 PATH 项。
 
 已有版本直接再次运行同一 MSI；原生安装器处理升级、修复、降级检查和服务登记，保留设备身份、凭据、任务记录及启动意图。安装阶段归档不兼容账户后，只需运行普通 `sunshine-client setup` 并输入新的实例授权码；有效 v2 身份仍会直接复用，未完成事务仍会恢复。
 

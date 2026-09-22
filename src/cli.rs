@@ -623,11 +623,11 @@ fn execute_pair(args: &Args, path: &Path) -> Result<Value> {
                 } else {
                     prompt_text("Server HTTPS origin", MAX_URL_BYTES, deadline)?
                 },
-                authorization_code: prompt_secret(
-                    "Authorization code",
+                authorization_code: Zeroizing::new(prompt_text(
+                    "Authorization code (visible)",
                     MAX_AUTHORIZATION_CODE_BYTES,
                     deadline,
-                )?,
+                )?),
                 sunshine_endpoint: prompt_text(
                     "Local Sunshine HTTPS URL",
                     MAX_URL_BYTES,

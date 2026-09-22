@@ -30,6 +30,9 @@ sunshine-client doctor --sunshine --format json
 
 Bootstrap JSON、本机 Sunshine 地址约束、候选配置的 `validate/diff/apply`、密码更新和授权码轮换见[完整配置指南](docs/configuration.md)。不要把 Manager 授权码或 Sunshine 密码写进命令参数、Shell 历史和日志。
 
+使用 `setup --interactive` 或 `pair --interactive` 时，Manager 实例授权码按普通文本输入并在终端中明文
+显示，不提供遮罩或隐藏切换；本机 Sunshine 密码仍使用隐藏输入。这两个字段都不会写入日志或命令参数。
+
 各平台安装和状态目录见[平台安装指南](docs/platform-setup.md)。
 
 ## 开发验证

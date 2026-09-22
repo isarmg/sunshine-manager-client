@@ -101,6 +101,10 @@ sudo shred -u /root/sunshine-bootstrap.json
 sudo sunshine-client setup --interactive
 ```
 
+首次配对和 `pair replace --interactive` 的 Manager 实例授权码都使用 `Authorization code (visible)` 普通
+文本提示，输入或粘贴内容会在终端中明文回显，不提供遮罩、隐藏切换或特殊显示流程。本机 Sunshine 密码
+仍使用隐藏输入。CLI 不会把两者写入日志、结果 JSON 或命令参数。
+
 `setup` 还会询问服务启动策略并验证连接；直接 `pair` 只处理配对，更适合分步骤部署。响应丢失时不要清空状态，先执行：
 
 ```sh
@@ -177,5 +181,5 @@ sunshine-client logs --tail 100
 
 - Manager 连接始终校验系统信任链和域名；先修复证书，不要关闭校验。
 - 本机 Sunshine 连接被限制为 HTTPS loopback；Client 不校验其自签名证书身份，但每次请求仍校验用户名和密码。
-- 授权码和 Sunshine 密码只通过受保护终端或 stdin 输入，不放入参数、环境变量、日志和版本库。
+- 授权码通过受保护终端的明文回显提示或 stdin 输入；Sunshine 密码通过隐藏提示或 stdin 输入。两者都不放入参数、环境变量、日志和版本库。
 - 配置、配对和凭据写入前停止服务；成功验证后再启动。
