@@ -328,4 +328,19 @@ mod tests {
             );
         }
     }
+
+    #[test]
+    fn unmarked_manager_401_retries_when_proxy_drops_authorization() {
+        let response = tungstenite::http::Response::builder()
+            .status(StatusCode::UNAUTHORIZED)
+            .header("content-type", "application/json")
+            .body(Some(
+                br#"{"code":"unauthorized","message":"unauthorized","retryable":false}"#.to_vec(),
+            ))
+            .unwrap();
+        assert_eq!(
+            classify_handshake(tungstenite::Error::Http(Box::new(response))),
+            TransportError::Disconnected
+        );
+    }
 }
