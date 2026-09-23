@@ -1035,6 +1035,15 @@ fn no_args(args: &Args) -> u8 {
     emit_sunshine("status", &args.format, &result)
 }
 
+fn validate_product_paths(args: Args) -> Result<Args> {
+    for option in ["--file", "--bootstrap"] {
+        if let Some(path) = args.get(option) {
+            absolute(Path::new(path))?;
+        }
+    }
+    Ok(args)
+}
+
 pub fn entry(raw: Vec<String>) -> u8 {
     let parse_format = requested_error_format(&raw);
     #[cfg(windows)]
@@ -1043,7 +1052,9 @@ pub fn entry(raw: Vec<String>) -> u8 {
         raw,
         &["--bootstrap", "--file", "--server", "--expected-revision"],
         &["--network", "--sunshine"],
-    ) {
+    )
+    .and_then(validate_product_paths)
+    {
         Ok(a) => a,
         Err(e) => return emit_sunshine("parse", parse_format, &Err(e)),
     };
@@ -1583,6 +1594,32 @@ fn validate_settings(settings: &Settings) -> Result<()> {
 #[cfg(test)]
 mod setup_tests {
     use super::*;
+
+    #[test]
+    fn product_input_paths_are_validated_independently_of_common_options() {
+        let root = std::env::current_dir().unwrap();
+        for option in ["--file", "--bootstrap"] {
+            for path in [
+                PathBuf::from("candidate.json"),
+                root.join("../candidate.json"),
+            ] {
+                let mut args = Args::parse(Vec::new(), &[], &[]).unwrap();
+                args.options
+                    .insert(option.into(), path.display().to_string());
+                let error = validate_product_paths(args)
+                    .err()
+                    .expect("unsafe path rejected");
+                assert_eq!(error.code, "absolute_path_required");
+                assert_eq!(error.exit, 2);
+            }
+            let mut args = Args::parse(Vec::new(), &[], &[]).unwrap();
+            args.options.insert(
+                option.into(),
+                root.join("candidate.json").display().to_string(),
+            );
+            assert!(validate_product_paths(args).is_ok());
+        }
+    }
 
     fn installer_test_root(directory: &tempfile::TempDir) -> PathBuf {
         #[cfg(windows)]
