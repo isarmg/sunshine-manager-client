@@ -1188,8 +1188,8 @@ dependencies = [
 
 [[package]]
 name = "sarmg-client-cli"
-version = "0.9.15"
-source = "git+https://github.com/isarmg/sarmg-foundation-client.git?rev=8890ced415793b144997ebb04728f52fbe3e7e59#8890ced415793b144997ebb04728f52fbe3e7e59"
+version = "0.9.16"
+source = "git+https://github.com/isarmg/sarmg-foundation-client.git?rev=9bf6eec21f42188c73105eef2f369bf47c8b8f86#9bf6eec21f42188c73105eef2f369bf47c8b8f86"
 dependencies = [
  "libc",
  "serde",
@@ -1203,8 +1203,8 @@ dependencies = [
 
 [[package]]
 name = "sarmg-client-fs-safety"
-version = "0.9.15"
-source = "git+https://github.com/isarmg/sarmg-foundation-client.git?rev=8890ced415793b144997ebb04728f52fbe3e7e59#8890ced415793b144997ebb04728f52fbe3e7e59"
+version = "0.9.16"
+source = "git+https://github.com/isarmg/sarmg-foundation-client.git?rev=9bf6eec21f42188c73105eef2f369bf47c8b8f86#9bf6eec21f42188c73105eef2f369bf47c8b8f86"
 dependencies = [
  "getrandom 0.4.3",
  "libc",
@@ -1214,8 +1214,8 @@ dependencies = [
 
 [[package]]
 name = "sarmg-client-runtime"
-version = "0.9.15"
-source = "git+https://github.com/isarmg/sarmg-foundation-client.git?rev=8890ced415793b144997ebb04728f52fbe3e7e59#8890ced415793b144997ebb04728f52fbe3e7e59"
+version = "0.9.16"
+source = "git+https://github.com/isarmg/sarmg-foundation-client.git?rev=9bf6eec21f42188c73105eef2f369bf47c8b8f86#9bf6eec21f42188c73105eef2f369bf47c8b8f86"
 dependencies = [
  "async-trait",
  "getrandom 0.4.3",
@@ -1234,8 +1234,8 @@ dependencies = [
 
 [[package]]
 name = "sarmg-client-secret"
-version = "0.9.15"
-source = "git+https://github.com/isarmg/sarmg-foundation-client.git?rev=8890ced415793b144997ebb04728f52fbe3e7e59#8890ced415793b144997ebb04728f52fbe3e7e59"
+version = "0.9.16"
+source = "git+https://github.com/isarmg/sarmg-foundation-client.git?rev=9bf6eec21f42188c73105eef2f369bf47c8b8f86#9bf6eec21f42188c73105eef2f369bf47c8b8f86"
 dependencies = [
  "zeroize",
 ]

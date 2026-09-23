@@ -8,7 +8,7 @@ Client 支持 Windows x64、Linux x64 和 macOS Apple Silicon。部署时核对�
 | Manager | 0.11.11 |
 | Manager 协议 | sunshine-management/2；sunshine-client-protocol 0.2.0，固定提交 3501d1eebd5ad16abb52c9901cbef745a1d53afb |
 | Sunshine | v2026.914.233613 |
-| Client Foundation | 0.9.15，固定提交 8890ced415793b144997ebb04728f52fbe3e7e59 |
+| Client Foundation | 0.9.16，固定提交 9bf6eec21f42188c73105eef2f369bf47c8b8f86 |
 | 设备账户 | 当前 v2 授权与配对状态 |
 | IPC | Foundation GetStatus/1，校验进程世代、安装身份与配置修订 |
 
