@@ -50,7 +50,7 @@ sudo /usr/local/bin/sunshine-client setup
 
 ## Sunshine 服务控制
 
-Manager 发起的 Sunshine 服务控制使用固定的本机服务：Windows 为 `SunshineService`，Ubuntu 为系统级 `sunshine.service`；macOS 不上报此能力。Windows 上的启动、停止在服务已处于目标状态时直接确认，重启已停止的服务会启动它。支持的平台都要读回运行或停止状态；状态未达到目标时操作结果不能视为成功。
+Manager 发起的 Sunshine 服务控制使用固定的本机服务：Windows 为 `SunshineService`，Ubuntu 为系统级 `sunshine.service`；macOS 不上报此能力。Windows 上的启动、停止在服务已处于目标状态时直接确认，重启已停止的服务会启动它。服务管理器单次命令最多等待 20 秒；支持的平台都要读回运行或停止状态，状态未达到目标时操作结果不能视为成功。
 
 ## 本机 Sunshine HTTPS 与认证边界
 

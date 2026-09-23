@@ -1,4 +1,4 @@
-use std::{collections::BTreeMap, sync::Arc, time::Duration};
+use std::{collections::BTreeMap, process::Output, sync::Arc, time::Duration};
 
 use async_trait::async_trait;
 use base64::{Engine as _, engine::general_purpose::STANDARD};
@@ -320,6 +320,20 @@ pub(crate) const fn platform_service_control_available() -> bool {
 
 struct LocalServiceController {
     mode: ServiceControlMode,
+}
+
+const SERVICE_COMMAND_TIMEOUT: Duration = Duration::from_secs(20);
+
+async fn service_command_output(
+    mut command: tokio::process::Command,
+    deadline: Duration,
+) -> Result<Output, AdapterError> {
+    // A stuck service manager must release the single command execution lane.
+    command.kill_on_drop(true);
+    tokio::time::timeout(deadline, command.output())
+        .await
+        .map_err(|_| AdapterError::ApiUnavailable)?
+        .map_err(|_| AdapterError::UnsupportedCapability)
 }
 
 #[derive(Debug)]
@@ -668,16 +682,13 @@ impl LocalServiceController {
                 if self.mode == ServiceControlMode::SystemdUser {
                     command.arg("--user");
                 }
-                let output = command
-                    .args([
-                        "show",
-                        "--property=ActiveState",
-                        "--value",
-                        "sunshine.service",
-                    ])
-                    .output()
-                    .await
-                    .map_err(|_| AdapterError::UnsupportedCapability)?;
+                command.args([
+                    "show",
+                    "--property=ActiveState",
+                    "--value",
+                    "sunshine.service",
+                ]);
+                let output = service_command_output(command, SERVICE_COMMAND_TIMEOUT).await?;
                 if !output.status.success() {
                     return Ok(ServiceState::Unknown);
                 }
@@ -690,11 +701,9 @@ impl LocalServiceController {
                 })
             }
             ServiceControlMode::WindowsService => {
-                let output = tokio::process::Command::new("sc.exe")
-                    .args(["query", "SunshineService"])
-                    .output()
-                    .await
-                    .map_err(|_| AdapterError::UnsupportedCapability)?;
+                let mut command = tokio::process::Command::new("sc.exe");
+                command.args(["query", "SunshineService"]);
+                let output = service_command_output(command, SERVICE_COMMAND_TIMEOUT).await?;
                 if !output.status.success() {
                     return Ok(ServiceState::Unknown);
                 }
@@ -733,7 +742,7 @@ impl LocalServiceController {
         {
             return Ok(state);
         }
-        let status = match self.mode {
+        let mut command = match self.mode {
             ServiceControlMode::SystemdUser | ServiceControlMode::SystemdSystem => {
                 let mut command = tokio::process::Command::new("systemctl");
                 if self.mode == ServiceControlMode::SystemdUser {
@@ -745,32 +754,28 @@ impl LocalServiceController {
                         ServiceAction::Stop => "stop",
                         ServiceAction::Restart => "restart",
                     })
-                    .arg("sunshine.service")
-                    .status()
-                    .await
+                    .arg("sunshine.service");
+                command
             }
             ServiceControlMode::WindowsService => {
-                tokio::process::Command::new("sc.exe")
-                    .args([
-                        match action {
-                            ServiceAction::Start => "start",
-                            ServiceAction::Stop => "stop",
-                            ServiceAction::Restart
-                                if windows_state == Some(ServiceState::Stopped) =>
-                            {
-                                "start"
-                            }
-                            ServiceAction::Restart => "stop",
-                        },
-                        "SunshineService",
-                    ])
-                    .status()
-                    .await
+                let mut command = tokio::process::Command::new("sc.exe");
+                command.args([
+                    match action {
+                        ServiceAction::Start => "start",
+                        ServiceAction::Stop => "stop",
+                        ServiceAction::Restart if windows_state == Some(ServiceState::Stopped) => {
+                            "start"
+                        }
+                        ServiceAction::Restart => "stop",
+                    },
+                    "SunshineService",
+                ]);
+                command
             }
             ServiceControlMode::Disabled => unreachable!(),
-        }
-        .map_err(|_| AdapterError::UnsupportedCapability)?;
-        if !status.success() {
+        };
+        let status = service_command_output(command, SERVICE_COMMAND_TIMEOUT).await?;
+        if !status.status.success() {
             return Err(AdapterError::ApiUnavailable);
         }
         if self.mode == ServiceControlMode::WindowsService
@@ -786,11 +791,11 @@ impl LocalServiceController {
             if self.status().await? != ServiceState::Stopped {
                 return Err(AdapterError::ApiUnavailable);
             }
-            if !tokio::process::Command::new("sc.exe")
-                .args(["start", "SunshineService"])
-                .status()
-                .await
-                .map_err(|_| AdapterError::UnsupportedCapability)?
+            command = tokio::process::Command::new("sc.exe");
+            command.args(["start", "SunshineService"]);
+            if !service_command_output(command, SERVICE_COMMAND_TIMEOUT)
+                .await?
+                .status
                 .success()
             {
                 return Err(AdapterError::ApiUnavailable);
@@ -1112,5 +1117,20 @@ mod local_tls_tests {
                 )
                 .is_ok()
         );
+    }
+}
+
+#[cfg(all(test, unix))]
+mod service_command_tests {
+    use super::*;
+
+    #[tokio::test]
+    async fn hung_service_manager_command_has_a_deadline() {
+        let mut command = tokio::process::Command::new("sleep");
+        command.arg("5");
+        let started = tokio::time::Instant::now();
+        let result = service_command_output(command, Duration::from_millis(25)).await;
+        assert_eq!(result.unwrap_err(), AdapterError::ApiUnavailable);
+        assert!(started.elapsed() < Duration::from_secs(2));
     }
 }
