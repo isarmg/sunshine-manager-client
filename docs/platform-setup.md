@@ -48,6 +48,10 @@ sudo /usr/local/bin/sunshine-client setup
 
 再次运行原生 PKG 即可覆盖旧程序，或在保留状态的卸载后重装。安装器保留身份和执行记录；随后运行 `/usr/local/bin/sunshine-client setup`。发行文件未签名、未公证，使用系统提供的本地批准入口允许已校验的程序运行，不要全局关闭系统安全检查。
 
+## Sunshine 服务控制
+
+Manager 发起的 Sunshine 服务控制使用固定的本机服务：Windows 为 `SunshineService`，Ubuntu 为系统级 `sunshine.service`；macOS 不上报此能力。Windows 上的启动、停止在服务已处于目标状态时直接确认，重启已停止的服务会启动它。支持的平台都要读回运行或停止状态；状态未达到目标时操作结果不能视为成功。
+
 ## 本机 Sunshine HTTPS 与认证边界
 
 Client 只接受 `https://127.0.0.1:<port>/` 或等价的 IPv6 回环 IP 字面量。主机名、非回环地址、HTTP、URL 用户信息、查询、片段和额外路径都会在连接前被拒绝；请求不使用系统代理，也不跟随重定向。

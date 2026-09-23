@@ -719,6 +719,20 @@ impl LocalServiceController {
         if self.mode == ServiceControlMode::Disabled {
             return Err(AdapterError::UnsupportedCapability);
         }
+        let windows_state = if self.mode == ServiceControlMode::WindowsService {
+            Some(self.status().await?)
+        } else {
+            None
+        };
+        if let Some(state) = windows_state
+            && matches!(
+                (action, state),
+                (ServiceAction::Start, ServiceState::Running)
+                    | (ServiceAction::Stop, ServiceState::Stopped)
+            )
+        {
+            return Ok(state);
+        }
         let status = match self.mode {
             ServiceControlMode::SystemdUser | ServiceControlMode::SystemdSystem => {
                 let mut command = tokio::process::Command::new("systemctl");
@@ -741,6 +755,11 @@ impl LocalServiceController {
                         match action {
                             ServiceAction::Start => "start",
                             ServiceAction::Stop => "stop",
+                            ServiceAction::Restart
+                                if windows_state == Some(ServiceState::Stopped) =>
+                            {
+                                "start"
+                            }
                             ServiceAction::Restart => "stop",
                         },
                         "SunshineService",
@@ -754,7 +773,10 @@ impl LocalServiceController {
         if !status.success() {
             return Err(AdapterError::ApiUnavailable);
         }
-        if self.mode == ServiceControlMode::WindowsService && action == ServiceAction::Restart {
+        if self.mode == ServiceControlMode::WindowsService
+            && action == ServiceAction::Restart
+            && windows_state != Some(ServiceState::Stopped)
+        {
             for _ in 0..15 {
                 if self.status().await? == ServiceState::Stopped {
                     break;
@@ -785,7 +807,12 @@ impl LocalServiceController {
             }
             tokio::time::sleep(Duration::from_secs(1)).await;
         }
-        self.status().await
+        let observed = self.status().await?;
+        if observed == expected {
+            Ok(observed)
+        } else {
+            Err(AdapterError::ApiUnavailable)
+        }
     }
 }
 
