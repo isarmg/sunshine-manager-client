@@ -64,9 +64,9 @@ Sunshine 默认使用本机自签名证书。由于连接被限制在内核回�
 
 ## 已有配置、升级与故障处理
 
-`setup` 按配置、配对、服务注册、启动策略、运行状态和连接顺序执行后置验证。交互终端会逐步显示 `verified`；JSON 失败响应中的 `error.step` 指明失败关卡，`error.code` 和 `error.message` 给出稳定原因，操作系统服务命令失败时 `error.detail` 保留经过控制字符清理和长度限制的原始诊断。请求连接验证但服务未运行会直接失败，不再静默跳过后仍报告完成。设置写入完成与连接确认是不同层次；如果返回 `connection_unconfirmed`，保留现有身份并分别运行 `doctor --network` 和 `doctor --sunshine`，不能把它视为 Manager 与 Sunshine 均已连接，也不要删除状态重新配对。
+`setup` 按配置、配对、服务注册、启动策略、运行状态和连接顺序执行后置验证。交互终端会逐步显示 `verified`；JSON 失败响应中的 `error.step` 指明失败关卡，`error.code` 和 `error.message` 给出稳定原因，操作系统服务命令失败时 `error.detail` 保留经过控制字符清理和长度限制的原始诊断。请求连接验证但服务未运行时返回失败。设置写入完成与连接确认是不同层次；如果返回 `connection_unconfirmed`，保留现有身份并分别运行 `doctor --network` 和 `doctor --sunshine`，不能把它视为 Manager 与 Sunshine 均已连接，也不要删除状态重新配对。
 
-当前 v2 有效身份无需重复初始化或配对。再次运行 `setup` 会复用身份，待处理事务会调用 `pair resume`；`config show --format json` 查看脱敏配置与修订，候选配置只支持 `sunshine_endpoint`；用 `config validate/diff/apply --file <绝对路径>`，提交还需要 `--expected-revision <当前修订>`，写入前停止服务。Client 不再询问 Sunshine 管理权限，配对后直接启用当前平台支持的专用能力。
+当前 v2 有效身份无需重复初始化或配对。再次运行 `setup` 会复用身份，待处理事务会调用 `pair resume`；`config show --format json` 查看脱敏配置与修订，候选配置只支持 `sunshine_endpoint`；用 `config validate/diff/apply --file <绝对路径>`，提交还需要 `--expected-revision <当前修订>`，写入前停止服务。配对后直接启用当前平台支持的 Sunshine 专用管理能力。
 
 若 `status` 返回 `pairing_state_incompatible`，不要重命名整个状态目录。先在 Manager 创建新实例授权码，再运行 `pair replace --interactive`。Client 会先只读验证执行日志；验证通过后将旧 `identity.json` 归档为唯一的 `identity.incompatible-*.json`，验证失败则返回 `important_state_incompatible`，且配对资料与执行日志均保持原样。
 
