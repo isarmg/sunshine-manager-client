@@ -273,9 +273,15 @@ pub fn validate_manager_endpoint(url: &Url) -> Result<(), TransportError> {
 
 fn classify_handshake(error: tungstenite::Error) -> TransportError {
     match error {
-        // The Manager uses 401 for an invalid device credential. Its trusted
-        // ingress check uses 403, which can recover when the proxy is repaired.
-        tungstenite::Error::Http(response) if response.status() == StatusCode::UNAUTHORIZED => {
+        // Only the Manager's own authentication response proves the device
+        // credential is invalid. A proxy can generate unrelated 401 or 403.
+        tungstenite::Error::Http(response)
+            if response.status() == StatusCode::UNAUTHORIZED
+                && response
+                    .headers()
+                    .get("x-sarmg-error-code")
+                    .is_some_and(|value| value.as_bytes() == b"unauthorized") =>
+        {
             TransportError::Revoked
         }
         _ => TransportError::Disconnected,
@@ -287,19 +293,35 @@ mod tests {
     use super::*;
 
     #[test]
-    fn handshake_distinguishes_credentials_from_recoverable_ingress_failures() {
-        for (status, expected) in [
-            (StatusCode::UNAUTHORIZED, TransportError::Revoked),
-            (StatusCode::FORBIDDEN, TransportError::Disconnected),
+    fn handshake_distinguishes_manager_authentication_from_proxy_failures() {
+        for (status, marker, expected) in [
+            (
+                StatusCode::UNAUTHORIZED,
+                Some("unauthorized"),
+                TransportError::Revoked,
+            ),
+            (StatusCode::UNAUTHORIZED, None, TransportError::Disconnected),
+            (
+                StatusCode::UNAUTHORIZED,
+                Some("forbidden"),
+                TransportError::Disconnected,
+            ),
+            (
+                StatusCode::FORBIDDEN,
+                Some("unauthorized"),
+                TransportError::Disconnected,
+            ),
             (
                 StatusCode::SERVICE_UNAVAILABLE,
+                None,
                 TransportError::Disconnected,
             ),
         ] {
-            let response = tungstenite::http::Response::builder()
-                .status(status)
-                .body(None)
-                .unwrap();
+            let mut builder = tungstenite::http::Response::builder().status(status);
+            if let Some(marker) = marker {
+                builder = builder.header("x-sarmg-error-code", marker);
+            }
+            let response = builder.body(None).unwrap();
             assert_eq!(
                 classify_handshake(tungstenite::Error::Http(Box::new(response))),
                 expected
