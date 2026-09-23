@@ -1,13 +1,13 @@
 # 各平台安装与覆盖升级
 
-适用于 0.2.9。Client 是管理代理；需要先安装 Sunshine 并在其 Web UI 设置用户名、密码。Manager 地址、Manager 配对码、Sunshine 本机地址和 Sunshine 管理凭据是不同的输入。每个平台只发布一个原生安装包，安装器检查平台、架构、权限并注册服务。安装后的逐步配置和配对命令见[完整配置指南](configuration.md)。
+适用于 0.2.10。Client 是管理代理；需要先安装 Sunshine 并在其 Web UI 设置用户名、密码。Manager 地址、Manager 配对码、Sunshine 本机地址和 Sunshine 管理凭据是不同的输入。每个平台只发布一个原生安装包，安装器检查平台、架构、权限并注册服务。安装后的逐步配置和配对命令见[完整配置指南](configuration.md)。
 
 ## Windows 11 x64
 
 下载并校验 Release 的 Windows MSI。在管理员 PowerShell 中进行普通安装；安装事务只部署程序和服务，不执行交互式 `setup`：
 
 ```powershell
-msiexec.exe /i .\sunshine-client-0.2.9-windows-x64.msi /norestart
+msiexec.exe /i .\sunshine-client-0.2.10-windows-x64.msi /norestart
 $installRoot = (Get-ItemProperty 'HKLM:\Software\sarmg\Sunshine Client').InstallLocation
 $client = Join-Path $installRoot 'sunshine-client.exe'
 ```
@@ -20,18 +20,18 @@ MSI 只安装程序并登记 Manual/Stopped 服务，不启动配对，也不读
 
 交互安装会进入“自定义安装”页：可以修改安装目录，并分别选择是否保留旧的 Manager/Sunshine 配置与配对凭据、是否保留旧的执行日志、是否为 Setup 准备不兼容账户；三项默认选中。取消前两项会在结构安全检查通过后永久清理对应类别；取消兼容性准备则完整保留旧账户，由管理员之后显式处理。向导最终明确显示完成或失败，不会无提示退出。
 
-MSI 同版文件修复：`msiexec.exe /i "完整路径\sunshine-client-0.2.9-windows-x64.msi" REINSTALL=ALL REINSTALLMODE=amus /l*v "%TEMP%\sunshine-client-install.log"`（在 cmd 中执行）。安装器忙碌时等待其他安装结束；3010 表示 Windows 需要重启完成替换。使用 `Get-Service SunshineClient` 和 `sunshine-client service status` 检查服务。
+MSI 同版文件修复：`msiexec.exe /i "完整路径\sunshine-client-0.2.10-windows-x64.msi" REINSTALL=ALL REINSTALLMODE=amus /l*v "%TEMP%\sunshine-client-install.log"`（在 cmd 中执行）。安装器忙碌时等待其他安装结束；3010 表示 Windows 需要重启完成替换。使用 `Get-Service SunshineClient` 和 `sunshine-client service status` 检查服务。
 
 ## Ubuntu 24.04 x86_64
 
 ```sh
-sudo apt install ./sunshine-client_0.2.9_amd64.deb
+sudo apt install ./sunshine-client_0.2.10_amd64.deb
 sudo sunshine-client setup
 ```
 
 默认配置与状态位于 `/var/lib/sunshine-client`，运行账户 `sunshine-client`。安装后运行 `sudo sunshine-client setup`，按提示选择开机启动、立即启动并验证连接。日志：`sudo journalctl -u sunshine-client.service -n 100 --no-pager`。
 
-同版损坏执行 `sudo apt install --reinstall ./sunshine-client_0.2.9_amd64.deb`。若状态来自 v1，先创建新授权码，再运行 `sudo sunshine-client pair replace --interactive`；Client 会归档旧账户文档，执行日志异常时则保留所有原件并明确报错。若安装器没有交互终端，稍后手动运行该命令。
+同版损坏执行 `sudo apt install --reinstall ./sunshine-client_0.2.10_amd64.deb`。若状态来自 v1，先创建新授权码，再运行 `sudo sunshine-client pair replace --interactive`；Client 会归档旧账户文档，执行日志异常时则保留所有原件并明确报错。若安装器没有交互终端，稍后手动运行该命令。
 
 手工归档只包含可执行文件、文档和校验元数据，不包含 Shell/Python 安装包装脚本；生产安装和覆盖请使用 DEB。解压的可执行文件可用于临时诊断，但不替代原生服务安装器。
 
@@ -40,7 +40,7 @@ sudo sunshine-client setup
 只提供 Apple Silicon 原生 PKG，不提供 Intel 版本：
 
 ```sh
-sudo installer -pkg ./sunshine-client-0.2.9-macos-arm64-unsigned.pkg -target /
+sudo installer -pkg ./sunshine-client-0.2.10-macos-arm64-unsigned.pkg -target /
 sudo /usr/local/bin/sunshine-client setup
 ```
 
