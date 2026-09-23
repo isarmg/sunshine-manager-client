@@ -56,7 +56,7 @@ Manager 发起的 Sunshine 服务控制使用固定的本机服务：Windows 为
 
 Client 只接受 `https://127.0.0.1:<port>/` 或等价的 IPv6 回环 IP 字面量。主机名、非回环地址、HTTP、URL 用户信息、查询、片段和额外路径都会在连接前被拒绝；请求不使用系统代理，也不跟随重定向。
 
-Sunshine 默认使用本机自签名证书。由于连接被限制在内核回环接口，本版本不校验 Sunshine 证书链、名称、指纹或固定值，也不读取和保存 `cacert.pem`。TLS 仍用于加密连接，每个 API 请求均携带受保护状态中的 Sunshine Basic Auth 凭据；401/403 会作为凭据拒绝处理。Manager 是独立的远程安全边界，始终使用标准 WebPKI 身份校验和设备长期凭据认证。
+Sunshine 默认使用本机自签名证书。由于连接被限制在内核回环接口，本版本不校验 Sunshine 证书链、名称、指纹或固定值，也不读取和保存 `cacert.pem`。TLS 仍用于加密连接，每个 API 请求均携带受保护状态中的 Sunshine Basic Auth 凭据；401/403 会作为凭据拒绝处理。Manager 是独立的远程安全边界，始终使用标准 WebPKI 身份校验和设备长期凭据认证。Manager WebSocket 握手返回 401 时 Client 停止重连并等待管理员处理凭据；入口代理校验返回 403 或服务暂不可用时 Client 按退避策略重连。
 
 公开的首次配对入口使用受保护的 stdin JSON：
 

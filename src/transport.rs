@@ -273,14 +273,37 @@ pub fn validate_manager_endpoint(url: &Url) -> Result<(), TransportError> {
 
 fn classify_handshake(error: tungstenite::Error) -> TransportError {
     match error {
-        tungstenite::Error::Http(response)
-            if matches!(
-                response.status(),
-                StatusCode::UNAUTHORIZED | StatusCode::FORBIDDEN
-            ) =>
-        {
+        // The Manager uses 401 for an invalid device credential. Its trusted
+        // ingress check uses 403, which can recover when the proxy is repaired.
+        tungstenite::Error::Http(response) if response.status() == StatusCode::UNAUTHORIZED => {
             TransportError::Revoked
         }
         _ => TransportError::Disconnected,
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn handshake_distinguishes_credentials_from_recoverable_ingress_failures() {
+        for (status, expected) in [
+            (StatusCode::UNAUTHORIZED, TransportError::Revoked),
+            (StatusCode::FORBIDDEN, TransportError::Disconnected),
+            (
+                StatusCode::SERVICE_UNAVAILABLE,
+                TransportError::Disconnected,
+            ),
+        ] {
+            let response = tungstenite::http::Response::builder()
+                .status(status)
+                .body(None)
+                .unwrap();
+            assert_eq!(
+                classify_handshake(tungstenite::Error::Http(Box::new(response))),
+                expected
+            );
+        }
     }
 }
