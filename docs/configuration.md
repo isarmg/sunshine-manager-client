@@ -1,6 +1,6 @@
 # Sunshine Client 配置指南
 
-本文适用于 `sunshine-client` `0.3.1`。Client 必须先连接本机 Sunshine，再与 Sunshine Manager 配对；以下命令不会安装 Sunshine。
+本文适用于 `sunshine-client` `0.3.2`。Client 必须先连接本机 Sunshine，再与 Sunshine Manager 配对；以下命令不会安装 Sunshine。
 
 ## 1. 前置条件与状态目录
 
@@ -105,7 +105,10 @@ sudo sunshine-client setup --interactive
 文本提示，输入或粘贴内容会在终端中明文回显，不提供遮罩、隐藏切换或特殊显示流程。本机 Sunshine 密码
 仍使用隐藏输入。CLI 不会把两者写入日志、结果 JSON 或命令参数。
 
-`setup` 还会询问服务启动策略并验证连接；直接 `pair` 只处理配对，更适合分步骤部署。响应丢失时不要清空状态，先执行：
+`setup` 仅询问是否开机自启，默认 Yes，直接按 Enter 即可；完成配对后固定启动后台服务并验证连接。
+当前平台支持的管理功能全部启用，没有重启、应用、配对、诊断或维护权限开关。
+`setup --input-stdin --non-interactive` 默认开机自启、立即启动并验证，不再读取额外确认输入。
+直接 `pair` 只处理配对，适合分步骤部署。响应丢失时不要清空状态，先执行：
 
 ```sh
 sudo sunshine-client pair status --format json
@@ -157,6 +160,8 @@ sudo sunshine-client service start
 若旧版本账户文档返回 `pairing_state_incompatible`，使用同一条 `pair replace` 命令。Client 会在确认执行日志完整后归档旧账户文档并创建当前身份；如果执行日志不兼容或不可读，则返回 `important_state_incompatible`，不会删除、改写或绕过这些重要记录。
 
 ## 6. 启动和验证
+
+完整 `setup` 已自动启动并验证服务。以下命令用于后续查看或显式恢复已停用的服务：
 
 ```sh
 sudo sunshine-client service enable

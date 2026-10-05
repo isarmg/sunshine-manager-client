@@ -14,7 +14,7 @@ if [[ $("$binary" --version) != sunshine-client\ * ]]; then
   exit 1
 fi
 script_dir=$(cd -- "$(dirname -- "$0")" && pwd)
-for target in /opt/sunshine-client /var/lib/sunshine-client /etc/systemd/system/sunshine-client.service /usr/local/bin/sunshine-client; do
+for target in /opt/sunshine-client /var/lib/sunshine-client /etc/systemd/system/sunshine-client.service /usr/lib/systemd/system/sunshine-client.service /usr/local/bin/sunshine-client; do
   if [[ -e $target || -L $target ]]; then
     exec bash "$script_dir/repair-existing.sh" "$binary" "$script_dir"
   fi
@@ -29,12 +29,14 @@ for parent in /opt /var/lib /etc/systemd/system /usr/local/bin; do
   mode=$(stat -c %a "$parent")
   (( (8#$mode & 0022) == 0 )) || exit 8
 done
-made_binary=0 made_state=0 made_user=0 made_unit=0 made_link=0 committed=0
+made_binary=0 made_state=0 made_user=0 made_unit=0 made_link=0 made_enable=0 committed=0
 rollback() {
   result=$?
   trap - EXIT HUP INT TERM
   if [[ $committed = 0 ]]; then
     set +e
+    # enable may have created only some startup links before returning an error.
+    [[ $made_enable = 0 ]] || systemctl disable --now sunshine-client.service
     [[ $made_link = 0 ]] || rm -f /usr/local/bin/sunshine-client
     if [[ $made_unit = 1 ]]; then
       rm -f /etc/systemd/system/sunshine-client.service
@@ -72,5 +74,7 @@ install -m 0644 "$script_dir/sunshine-client.service" /etc/systemd/system/sunshi
 systemctl daemon-reload
 ln -s /opt/sunshine-client/sunshine-client /usr/local/bin/sunshine-client
 made_link=1
+made_enable=1
+systemctl enable sunshine-client.service
 committed=1
-echo "Client installed. Run sunshine-client setup --interactive."
+echo "Client installed with systemd startup enabled. Complete pairing with sunshine-client setup --interactive; the unpaired service remains stopped."

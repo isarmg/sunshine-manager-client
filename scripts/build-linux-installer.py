@@ -46,6 +46,14 @@ for path in /opt/sunshine-client /var/lib/sunshine-client /etc/systemd/system/su
 done
 if [ -f /etc/systemd/system/sunshine-client.service ]; then
  grep -Fqx 'ExecStart=/opt/sunshine-client/sunshine-client run --state /var/lib/sunshine-client' /etc/systemd/system/sunshine-client.service || exit 8
+ # Retain the administrator's explicit startup choice when importing a script install.
+ policy=/etc/systemd/system/.sunshine-client-package-startup-policy
+ if [ ! -e "$policy" ] && [ ! -L "$policy" ]; then
+  if systemctl is-enabled --quiet sunshine-client.service; then startup=enabled; else startup=disabled; fi
+  (umask 077; set -C; printf '%s\\n' "$startup" > "$policy")
+ fi
+ [ -f "$policy" ] && [ ! -L "$policy" ] && [ "$(stat -c %u "$policy")" = 0 ] && [ "$(stat -c %a "$policy")" = 600 ] || exit 8
+ case "$(cat "$policy")" in enabled|disabled) ;; *) exit 8;; esac
 fi
 ''',
             'postinst': '''#!/bin/sh
@@ -64,10 +72,23 @@ if [ "$1" = configure ]; then
   rm /etc/systemd/system/sunshine-client.service
  fi
  systemctl daemon-reload
+ policy=/etc/systemd/system/.sunshine-client-package-startup-policy
+ if [ -e "$policy" ] || [ -L "$policy" ]; then
+  [ -f "$policy" ] && [ ! -L "$policy" ] && [ "$(stat -c %u "$policy")" = 0 ] && [ "$(stat -c %a "$policy")" = 600 ] || exit 8
+  case "$(cat "$policy")" in
+   enabled) systemctl enable --force sunshine-client.service;;
+   disabled) systemctl disable sunshine-client.service;;
+   *) exit 8;;
+  esac
+ elif [ -z "${2:-}" ]; then
+  # Fresh installs opt in to boot startup; pairing still happens only in setup.
+  systemctl enable sunshine-client.service
+ fi
  if [ -f /run/sunshine-client-package-was-active ] && [ ! -L /run/sunshine-client-package-was-active ]; then
   systemctl start sunshine-client.service
   rm /run/sunshine-client-package-was-active
  fi
+ [ ! -f "$policy" ] || rm "$policy"
  if [ -t 0 ] && [ -t 1 ]; then
   if ! /usr/bin/sunshine-client setup; then echo 'Setup was not completed; installation and pairing progress were retained.' >&2; fi
  else

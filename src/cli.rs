@@ -488,11 +488,26 @@ fn ask_yes_no(label: &str, default: bool, deadline: Instant) -> Result<bool> {
         MAX_CONFIRMATION_BYTES,
         deadline,
     )?;
+    confirmation_answer(&value, default)
+}
+
+fn confirmation_answer(value: &str, default: bool) -> Result<bool> {
     match value.trim().to_ascii_lowercase().as_str() {
         "" => Ok(default),
         "y" | "yes" | "true" | "1" => Ok(true),
         "n" | "no" | "false" | "0" => Ok(false),
         _ => Err(fail(2, "invalid_confirmation")),
+    }
+}
+
+fn setup_autostart(
+    interactive: bool,
+    ask: impl FnOnce(&str, bool) -> Result<bool>,
+) -> Result<bool> {
+    if interactive {
+        ask("Enable service at system startup?", true)
+    } else {
+        Ok(true)
     }
 }
 
@@ -569,7 +584,7 @@ fn setup_failure(error: Failure, pairing: &Value, step: &'static str) -> Failure
 fn startup_policy_matches(status: &Value, enabled: bool) -> bool {
     let observed = status["startup"].as_str().unwrap_or("unknown");
     if enabled {
-        matches!(observed, "automatic" | "enabled" | "enabled-runtime")
+        matches!(observed, "automatic" | "enabled")
     } else {
         matches!(observed, "manual" | "disabled")
     }
@@ -792,10 +807,9 @@ fn setup(args: &Args, path: PathBuf) -> Result<Value> {
     let interactive = !args.has("--non-interactive") && !args.has("--input-stdin");
     let mut steps = Vec::new();
     let service_api = service();
-    let initial_service = service_api
+    service_api
         .status(args.timeout)
         .map_err(|error| error.at_step("service_inspection"))?;
-    let (default_enable, default_start) = setup_service_intent(&initial_service);
     let existing = match read_store(&path).map_err(|error| error.at_step("configuration"))? {
         Some(store) => identity(&store).map_err(|error| error.at_step("configuration"))?,
         None => None,
@@ -893,23 +907,11 @@ fn setup(args: &Args, path: PathBuf) -> Result<Value> {
         "verified",
         json!({"state":"active","durable_identity":true}),
     );
-    let (enable, start, verify) = if interactive {
-        let deadline = Instant::now() + args.timeout;
-        (
-            ask_yes_no(
-                "Enable service at system startup?",
-                default_enable,
-                deadline,
-            )
-            .map_err(|error| setup_failure(error, &pairing, "preferences"))?,
-            ask_yes_no("Run the service now?", default_start, deadline)
-                .map_err(|error| setup_failure(error, &pairing, "preferences"))?,
-            ask_yes_no("Verify the connection now?", default_start, deadline)
-                .map_err(|error| setup_failure(error, &pairing, "preferences"))?,
-        )
-    } else {
-        (default_enable, default_start, default_start)
-    };
+    let deadline = Instant::now() + args.timeout;
+    let enable = setup_autostart(interactive, |label, default| {
+        ask_yes_no(label, default, deadline)
+    })
+    .map_err(|error| setup_failure(error, &pairing, "preferences"))?;
     let registered = service_api
         .verified_status(args.timeout, &path)
         .map_err(|error| setup_failure(error, &pairing, "service_registration"))?;
@@ -938,75 +940,35 @@ fn setup(args: &Args, path: PathBuf) -> Result<Value> {
         "verified",
         json!({"requested":if enable {"enabled"} else {"disabled"},"observed":policy_status["startup"]}),
     );
-    let service_result = if start {
-        let status = service_api
-            .change(&setup_service_args(args), "start", &path)
-            .map_err(|error| setup_failure(error, &pairing, "service_runtime"))?;
-        if status["state"] != "running" {
-            return Err(setup_failure(
-                fail(11, "service_state_unconfirmed"),
-                &pairing,
-                "service_runtime",
-            ));
-        }
-        record_setup_step(
-            &mut steps,
-            interactive,
+    let service_result = service_api
+        .change(&setup_service_args(args), "start", &path)
+        .map_err(|error| setup_failure(error, &pairing, "service_runtime"))?;
+    if service_result["state"] != "running" {
+        return Err(setup_failure(
+            fail(11, "service_state_unconfirmed"),
+            &pairing,
             "service_runtime",
-            "verified",
-            json!({"requested":"running","observed":status["state"]}),
-        );
-        status
-    } else {
-        let current = service_api
-            .verified_status(args.timeout, &path)
-            .map_err(|error| setup_failure(error, &pairing, "service_runtime"))?;
-        let status = if current["state"] == "running" {
-            service_api
-                .change(&setup_service_args(args), "stop", &path)
-                .map_err(|error| setup_failure(error, &pairing, "service_runtime"))?
-        } else {
-            current
-        };
-        record_setup_step(
-            &mut steps,
-            interactive,
-            "service_runtime",
-            "skipped",
-            json!({"reason":"not_requested","observed":status["state"]}),
-        );
-        status
-    };
-    let verification = if verify {
-        if service_result["state"] != "running" {
-            return Err(setup_failure(
-                fail(4, "verification_requires_running_service"),
-                &pairing,
+        ));
+    }
+    record_setup_step(
+        &mut steps,
+        interactive,
+        "service_runtime",
+        "verified",
+        json!({"requested":"running","observed":service_result["state"]}),
+    );
+    let verification = match wait_for_healthy(&path, args.timeout) {
+        Ok(status) => {
+            record_setup_step(
+                &mut steps,
+                interactive,
                 "connection",
-            ));
+                "verified",
+                json!({"health":status["health"]}),
+            );
+            status
         }
-        match wait_for_healthy(&path, args.timeout) {
-            Ok(status) => {
-                record_setup_step(
-                    &mut steps,
-                    interactive,
-                    "connection",
-                    "verified",
-                    json!({"health":status["health"]}),
-                );
-                status
-            }
-            Err(error) => return Err(setup_failure(error, &pairing, "connection")),
-        }
-    } else {
-        record_setup_step(
-            &mut steps,
-            interactive,
-            "connection",
-            "skipped",
-            json!({"reason":"not_requested"}),
-        );
-        json!({"state":"skipped","reason":"not_requested"})
+        Err(error) => return Err(setup_failure(error, &pairing, "connection")),
     };
     Ok(json!({
         "setup":"completed",
@@ -1597,6 +1559,39 @@ mod setup_tests {
     use super::*;
 
     #[test]
+    fn setup_interactive_autostart_defaults_to_yes_when_enter_is_pressed() {
+        let mut prompts = 0;
+        let enabled = setup_autostart(true, |label, default| {
+            prompts += 1;
+            assert_eq!(label, "Enable service at system startup?");
+            assert!(default);
+            confirmation_answer("", default)
+        })
+        .unwrap();
+        assert!(enabled);
+        assert_eq!(prompts, 1);
+    }
+
+    #[test]
+    fn setup_without_interactive_input_enables_autostart_without_reading_stdin() {
+        assert!(
+            setup_autostart(false, |_, _| {
+                panic!("non-interactive Setup must not consume another input document")
+            })
+            .unwrap()
+        );
+    }
+
+    #[test]
+    fn setup_respects_an_explicit_autostart_decline_and_rejects_invalid_answers() {
+        assert!(!setup_autostart(true, |_, default| confirmation_answer("no", default)).unwrap());
+        let failure =
+            setup_autostart(true, |_, default| confirmation_answer("later", default)).unwrap_err();
+        assert_eq!(failure.code, "invalid_confirmation");
+        assert_eq!(failure.exit, 2);
+    }
+
+    #[test]
     fn product_input_paths_are_validated_independently_of_common_options() {
         let root = std::env::current_dir().unwrap();
         for option in ["--file", "--bootstrap"] {
@@ -1670,6 +1665,10 @@ mod setup_tests {
         ));
         assert!(!startup_policy_matches(&json!({"startup":"unknown"}), true));
         assert!(!startup_policy_matches(&json!({"startup":"manual"}), true));
+        assert!(!startup_policy_matches(
+            &json!({"startup":"enabled-runtime"}),
+            true
+        ));
     }
 
     #[test]

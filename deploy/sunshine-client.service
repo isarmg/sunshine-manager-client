@@ -1,6 +1,7 @@
 [Unit]
 Description=Sunshine management Client (no streaming)
 ConditionArchitecture=x86-64
+ConditionPathExists=/var/lib/sunshine-client/provisioning/identity.json
 After=network-online.target
 Wants=network-online.target
 

@@ -33,6 +33,10 @@ def exercise(binary, seed, state, service_user=None):
     initial = cli("service", "status")
     if not initial["installed"] or initial["state"] != "stopped":
         raise RuntimeError("installation must leave the Client stopped")
+    if platform.system() == "Windows" and initial["startup"] != "automatic":
+        raise RuntimeError("new Windows Client service must use native automatic system startup")
+    if platform.system() == "Linux" and initial["startup"] != "enabled":
+        raise RuntimeError("fresh Linux installation must enable systemd startup before pairing")
     if execute([seed, state]).returncode:
         raise RuntimeError("protected acceptance fixture could not be created")
     if service_user and execute(["chown", "-R", service_user, state]).returncode:

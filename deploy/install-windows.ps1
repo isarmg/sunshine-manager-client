@@ -77,9 +77,11 @@ try {
     }
     $command = '"' + $target + '" --windows-service --state "' + $stateDir + '"'
     if (-not $existingService) {
-    $null = New-Service -Name SunshineClient -DisplayName 'Sunshine management Client' -BinaryPathName $command -StartupType Manual -Description 'Independent management only; no video forwarding or general remote control.'
+    $null = New-Service -Name SunshineClient -DisplayName 'Sunshine management Client' -BinaryPathName $command -StartupType Automatic -Description 'Independent management only; no video forwarding or general remote control.'
     $madeService = $true
     }
+    # Existing registrations keep the administrator's chosen startup type.
+    # A newly registered service remains stopped until explicit local setup has paired it.
     if ($wasRunning) { Start-Service SunshineClient }
     Remove-Item -LiteralPath $backup -Recurse -Force -ErrorAction SilentlyContinue
     Write-Host 'Client installed. Run the installed sunshine-client.exe setup --interactive. No Sunshine process or firewall rule was changed.'

@@ -17,40 +17,39 @@ class InstallerTests(unittest.TestCase):
         }
         service = tree.find('.//w:ServiceInstall', ns)
         self.assertEqual(service.get('Name'), 'SunshineClient')
-        self.assertEqual(service.get('Start'), 'demand')
+        self.assertEqual(service.get('Start'), 'auto')
         self.assertIn('service --state', service.get('Arguments'))
         self.assertIsNone(tree.find('.//w:ServiceControl', ns).get('Start'))
         ui = tree.find('.//ui:WixUI', ns)
-        self.assertEqual(ui.get('Id'), 'WixUI_FeatureTree')
+        self.assertEqual(ui.get('Id'), 'WixUI_InstallDir')
         self.assertEqual(ui.get('InstallDirectory'), 'INSTALLFOLDER')
         install_location = tree.find('.//w:RegistryValue[@Name="InstallLocation"]', ns)
         self.assertIsNotNone(install_location)
         self.assertEqual(install_location.get('Value'), '[INSTALLFOLDER]')
-        features = {feature.get('Id'): feature for feature in tree.findall('.//w:Feature', ns)}
-        self.assertEqual(features['PreserveConfiguration'].get('AllowAbsent'), 'yes')
-        self.assertEqual(features['PrepareSetup'].get('AllowAbsent'), 'yes')
-        self.assertEqual(features['PreserveData'].get('AllowAbsent'), 'yes')
+        features = tree.findall('.//w:Feature', ns)
+        self.assertEqual(len(features), 1)
+        self.assertEqual(features[0].get('Id'), 'Complete')
+        self.assertEqual(features[0].get('AllowAbsent'), 'no')
+        components = {component.get('Id') for component in tree.findall('.//w:Component', ns)}
+        references = {reference.get('Id') for reference in features[0].findall('w:ComponentRef', ns)}
+        self.assertEqual(references, components)
         actions = {action.get('Id'): action for action in tree.findall('.//w:CustomAction', ns)}
-        self.assertEqual(actions['ResetOldConfiguration'].get('ExeCommand'), 'installer reset-configuration')
-        self.assertEqual(actions['ResetOldData'].get('ExeCommand'), 'installer reset-data')
+        self.assertNotIn('ResetOldConfiguration', actions)
+        self.assertNotIn('ResetOldData', actions)
         self.assertEqual(actions['PrepareSetupState'].get('ExeCommand'), 'installer prepare-setup')
         self.assertEqual(actions['PrepareSetupState'].get('Execute'), 'commit')
         self.assertEqual(actions['PrepareSetupState'].get('Return'), 'check')
         self.assertEqual(actions['PrepareSetupState'].get('FileRef'), 'ClientExe')
         self.assertEqual(actions['PrepareSetupState'].get('Impersonate'), 'no')
-        self.assertEqual(actions['ResetOldConfiguration'].get('Return'), 'check')
-        self.assertEqual(actions['ResetOldData'].get('Return'), 'check')
         sequence = {
             action.get('Action'): action.get('Condition')
             for action in tree.findall('.//w:InstallExecuteSequence/w:Custom', ns)
         }
-        self.assertIn('&PreserveConfiguration <> 3', sequence['ResetOldConfiguration'])
-        self.assertIn('&PreserveData <> 3', sequence['ResetOldData'])
-        self.assertIn('&PrepareSetup = 3', sequence['PrepareSetupState'])
+        self.assertEqual(sequence, {'PrepareSetupState': 'NOT REMOVE~="ALL"'})
         self.assertEqual(
             next(custom for custom in tree.findall('.//w:InstallExecuteSequence/w:Custom', ns)
                  if custom.get('Action') == 'PrepareSetupState').get('After'),
-            'ResetOldData',
+            'InstallFiles',
         )
         path_entry = tree.find('.//w:Environment[@Name="PATH"]', ns)
         self.assertIsNotNone(path_entry)
@@ -62,6 +61,8 @@ class InstallerTests(unittest.TestCase):
         self.assertIsNone(tree.find('.//w:CustomAction[@Id="LaunchInteractiveSetup"]', ns))
         self.assertIsNone(tree.find('.//w:InstallExecuteSequence/w:Custom[@Action="LaunchInteractiveSetup"]', ns))
         self.assertNotIn('TrayExe', (ROOT / 'packaging/windows/Package.wxs').read_text())
+        self.assertFalse(tree.findall('.//w:RegistryValue[@Key="Software\\Microsoft\\Windows\\CurrentVersion\\Run"]', ns))
+        self.assertFalse(tree.findall('.//w:StartupTask', ns))
 
     def test_deb_build_and_private_setup_contract(self):
         import shutil

@@ -158,6 +158,8 @@ foreach($path in @('{escaped}', '{escaped}\\bootstrap.json')) {{
         subprocess.run([str(installed / 'sunshine-client.exe'), 'init', '--state', str(Path(os.environ['ProgramData']) / 'SunshineClient'), '--bootstrap', str(bootstrap)], check=True, timeout=60)
         if powershell("(Get-Service SunshineClient).Status") != 'Stopped':
             raise ValueError('unpaired service was started by installer')
+        if powershell("(Get-Service SunshineClient).StartType") != 'Automatic':
+            raise ValueError('new Windows service is not registered for automatic system startup')
         state_file = Path(os.environ['ProgramData']) / 'SunshineClient/provisioning/state.sqlite3'
         before = state_file.read_bytes()
         subprocess.run(['msiexec.exe', '/i', str(installer), '/qn', '/norestart'], check=True)
@@ -188,8 +190,8 @@ foreach($path in @('{escaped}', '{escaped}\\bootstrap.json')) {{
             raise ValueError("repair changed existing protected state")
         if subprocess.run(["systemctl", "is-active", "--quiet", "sunshine-client.service"]).returncode == 0:
             raise ValueError("unpaired service was started by installer")
-        if subprocess.run(["systemctl", "is-enabled", "--quiet", "sunshine-client.service"]).returncode == 0:
-            raise ValueError("installer enabled the service without administrator action")
+        if subprocess.run(["systemctl", "is-enabled", "--quiet", "sunshine-client.service"]).returncode != 0:
+            raise ValueError("fresh Linux installation did not enable systemd startup")
         pending_run = subprocess.run([str(binary), "run", "--state", "/var/lib/sunshine-client", "--format", "json"], capture_output=True, timeout=60)
         if pending_run.returncode != 4:
             raise ValueError("unpaired run did not return awaiting_pairing")
@@ -201,7 +203,7 @@ foreach($path in @('{escaped}', '{escaped}\\bootstrap.json')) {{
         subprocess.run(['dpkg', '--remove', 'sunshine-client'], check=True)
         if not (state / "bootstrap.json").is_file():
             raise ValueError("uninstall removed protected state")
-    print("Native offline install, explicit-start policy, program replacement and state-preserving uninstall passed; online service behavior requires enrolled-device acceptance.")
+    print("Native offline install, default boot-start policy, program replacement and state-preserving uninstall passed; online service behavior requires enrolled-device acceptance.")
 
 
 def exercise_native_service(binary, seed, state, service_user=None):
