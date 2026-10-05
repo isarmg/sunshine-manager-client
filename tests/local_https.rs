@@ -30,16 +30,31 @@ fn openssl(path: &Path, args: &[&str]) {
         .expect("openssl is a required test dependency");
     assert!(
         output.status.success(),
-        "test certificate generation failed"
+        "test certificate generation failed: openssl {args:?} exited {}; stderr: {}",
+        output.status,
+        String::from_utf8_lossy(&output.stderr[output.stderr.len().saturating_sub(8192)..])
     );
 }
 
 fn certificates(path: &Path) {
+    // The system LibreSSL on macOS lacks newer OpenSSL CLI options such as
+    // -addext and x509 -copy_extensions. Explicit extensions keep the fixture's
+    // CA and HTTPS certificate properties independent of the host defaults.
+    std::fs::write(
+        path.join("openssl-fixture.cnf"),
+        "[req]\nprompt = no\ndistinguished_name = fixture_subject\n\
+         [fixture_subject]\nCN = localhost\n\
+         [fixture_ca]\nbasicConstraints = critical,CA:TRUE\n\
+         [fixture_server]\nsubjectAltName = IP:127.0.0.1\n\
+         basicConstraints = critical,CA:FALSE\nextendedKeyUsage = serverAuth\n",
+    )
+    .unwrap();
     openssl(
         path,
         &[
             "req",
             "-x509",
+            "-sha256",
             "-newkey",
             "rsa:2048",
             "-nodes",
@@ -51,8 +66,10 @@ fn certificates(path: &Path) {
             "1",
             "-subj",
             "/CN=Client Test CA",
-            "-addext",
-            "basicConstraints=critical,CA:TRUE",
+            "-config",
+            "openssl-fixture.cnf",
+            "-extensions",
+            "fixture_ca",
         ],
     );
     // Mirrors Sunshine's built-in certificate: self-signed CN, without a loopback SAN.
@@ -61,6 +78,7 @@ fn certificates(path: &Path) {
         &[
             "req",
             "-x509",
+            "-sha256",
             "-newkey",
             "rsa:2048",
             "-nodes",
@@ -72,6 +90,8 @@ fn certificates(path: &Path) {
             "1",
             "-subj",
             "/CN=Sunshine Gamestream Host",
+            "-config",
+            "openssl-fixture.cnf",
         ],
     );
     openssl(
@@ -79,6 +99,7 @@ fn certificates(path: &Path) {
         &[
             "req",
             "-new",
+            "-sha256",
             "-newkey",
             "rsa:2048",
             "-nodes",
@@ -88,12 +109,8 @@ fn certificates(path: &Path) {
             "server.csr",
             "-subj",
             "/CN=localhost",
-            "-addext",
-            "subjectAltName=IP:127.0.0.1",
-            "-addext",
-            "basicConstraints=critical,CA:FALSE",
-            "-addext",
-            "extendedKeyUsage=serverAuth",
+            "-config",
+            "openssl-fixture.cnf",
         ],
     );
     openssl(
@@ -101,6 +118,7 @@ fn certificates(path: &Path) {
         &[
             "x509",
             "-req",
+            "-sha256",
             "-in",
             "server.csr",
             "-CA",
@@ -112,8 +130,10 @@ fn certificates(path: &Path) {
             "server.pem",
             "-days",
             "1",
-            "-copy_extensions",
-            "copy",
+            "-extfile",
+            "openssl-fixture.cnf",
+            "-extensions",
+            "fixture_server",
         ],
     );
     openssl(
@@ -121,6 +141,7 @@ fn certificates(path: &Path) {
         &[
             "req",
             "-x509",
+            "-sha256",
             "-newkey",
             "rsa:2048",
             "-nodes",
@@ -132,8 +153,10 @@ fn certificates(path: &Path) {
             "1",
             "-subj",
             "/CN=Untrusted Test CA",
-            "-addext",
-            "basicConstraints=critical,CA:TRUE",
+            "-config",
+            "openssl-fixture.cnf",
+            "-extensions",
+            "fixture_ca",
         ],
     );
 }
@@ -535,7 +558,7 @@ fn credentials_are_not_formatted_in_adapter_errors() {
 #[tokio::test]
 #[ignore = "requires loopback sockets and openssl"]
 async fn real_https_overwrite_preserves_local_fields_and_backs_up_current_configuration() {
-    let temporary = tempfile::tempdir().unwrap();
+    let temporary = tempfile::tempdir_in(std::env::temp_dir().canonicalize().unwrap()).unwrap();
     certificates(temporary.path());
     let mut before = config("40");
     before["min_threads"] = serde_json::json!("4");

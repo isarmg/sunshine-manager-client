@@ -7,7 +7,6 @@
     <Property Id="EXISTINGCLIENTSERVICE"><RegistrySearch Id="ExistingService" Root="HKLM" Key="SYSTEM\CurrentControlSet\Services\SunshineClient" Name="ImagePath" Type="raw" Bitness="always64" /></Property>
     <Launch Condition="Installed OR WIX_UPGRADE_DETECTED OR NOT EXISTINGCLIENTSERVICE" Message="An unmanaged SunshineClient service already exists. Remove or rename that service before installing." />
     <Property Id="ARPURLINFOABOUT" Value="https://github.com/isarmg/sunshine-manager-client" />
-    <Property Id="ARPNOMODIFY" Value="1" />
     <ui:WixUI Id="WixUI_InstallDir" InstallDirectory="INSTALLFOLDER" />
     <WixVariable Id="WixUILicenseRtf" Value="$(var.LicenseRtf)" />
     <StandardDirectory Id="ProgramFiles64Folder">
