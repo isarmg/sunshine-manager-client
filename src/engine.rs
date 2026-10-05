@@ -337,6 +337,7 @@ impl<A: Sunshine, J: Journal> Executor<A, J> {
                     task.command,
                     Command::ReadConfig {}
                         | Command::ListApplications {}
+                        | Command::ListPendingPairings {}
                         | Command::ListPairedClients {}
                         | Command::ReadLogs { .. }
                         | Command::ReadDiagnostics {}
@@ -426,6 +427,10 @@ impl<A: Sunshine, J: Journal> Inner<A, J> {
             },
             Command::PatchConfig { .. } | Command::Restart { .. } => {
                 self.execute_config(task, record).await
+            }
+            Command::SaveConfig { set, remove, .. } => {
+                self.execute_config_overwrite(task, record, set, remove)
+                    .await
             }
             Command::ListApplications {} => match self.sunshine.applications().await {
                 Ok(snapshot) => self.finish(
@@ -591,6 +596,9 @@ impl<A: Sunshine, J: Journal> Inner<A, J> {
                     .await
                 {
                     Ok(()) => Report::PairingPinSubmitted {},
+                    Err(AdapterError::PairingRejected) => Report::Rejected {
+                        reason: Rejection::PairingFailed,
+                    },
                     Err(_) => Report::Unknown {
                         reason: Uncertainty::SideEffectNotConfirmed,
                     },
@@ -602,6 +610,14 @@ impl<A: Sunshine, J: Journal> Inner<A, J> {
                     &task.operation_id,
                     record,
                     Report::PairedClientsRead { snapshot },
+                ),
+                Err(error) => self.finish(&task.operation_id, record, rejected_adapter(error)),
+            },
+            Command::ListPendingPairings {} => match self.sunshine.pending_pairings().await {
+                Ok(pairings) => self.finish(
+                    &task.operation_id,
+                    record,
+                    Report::PendingPairingsRead { pairings },
                 ),
                 Err(error) => self.finish(&task.operation_id, record, rejected_adapter(error)),
             },
@@ -740,6 +756,47 @@ impl<A: Sunshine, J: Journal> Inner<A, J> {
                 self.finish(&task.operation_id, record, report)
             }
         }
+    }
+
+    async fn execute_config_overwrite(
+        &mut self,
+        task: &Task,
+        record: &mut ExecutionRecord,
+        set: &std::collections::BTreeMap<String, sunshine_client_protocol::config::FieldValue>,
+        remove: &std::collections::BTreeSet<String>,
+    ) -> Report {
+        // The page owns the managed snapshot. Read only to preserve current local-only fields.
+        let before = match self.sunshine.read().await {
+            Ok(configuration) => configuration,
+            Err(error) => return self.finish(&task.operation_id, record, rejected_adapter(error)),
+        };
+        let configuration = match before.merge(set, remove) {
+            Ok(configuration) => configuration,
+            Err(error) => return self.finish(&task.operation_id, record, rejected_adapter(error)),
+        };
+        if self
+            .deadline
+            .as_ref()
+            .is_some_and(ExecutionDeadline::expired)
+        {
+            return self.finish(
+                &task.operation_id,
+                record,
+                Report::Rejected {
+                    reason: Rejection::ExecutionExpired,
+                },
+            );
+        }
+        record.effect = Some(EffectIntent::Save {
+            target_revision: configuration.revision(),
+        });
+        if self.journal.replace(&task.operation_id, record).is_err() {
+            return persistence_failure();
+        }
+        // A lost response can follow a successful write. Inspect the result without another POST.
+        let _ = self.sunshine.save_overwrite(&before, &configuration).await;
+        let report = self.reconcile(record).await;
+        self.finish(&task.operation_id, record, report)
     }
 
     async fn execute_config(&mut self, task: &Task, record: &mut ExecutionRecord) -> Report {
@@ -1053,6 +1110,7 @@ fn rejected_adapter(error: AdapterError) -> Report {
             AdapterError::UnsafeConfiguration => Rejection::UnsafeConfiguration,
             AdapterError::ResourceConflict => Rejection::ResourceConflict,
             AdapterError::UnsupportedCapability => Rejection::UnsupportedCapability,
+            AdapterError::PairingRejected => Rejection::PairingFailed,
             AdapterError::CredentialsRejected
             | AdapterError::ApiUnavailable
             | AdapterError::InvalidLocalEndpoint => Rejection::SunshineUnavailable,

@@ -1,6 +1,6 @@
 [package]
 name = "sunshine-client"
-version = "0.3.0"
+version = "0.3.1"
 edition = "2024"
 rust-version = "1.98"
 license = "Apache-2.0"
@@ -18,7 +18,7 @@ sarmg-client-runtime = { git = "https://github.com/isarmg/sarmg-foundation-clien
 serde = { version = "1", features = ["derive"] }
 serde_json = "1"
 sha2 = "0.10"
-sunshine-client-protocol = { git = "https://github.com/isarmg/sunshine-manager-server.git", rev = "672358672061607496487d97b998b2696aed0fa1", version = "=0.3.0" }
+sunshine-client-protocol = { git = "https://github.com/isarmg/sunshine-manager-server.git", rev = "2998876d091e2c1666de36b86f7417f80f04fded", version = "=0.4.0" }
 thiserror = "2"
 tokio = { version = "1", features = ["macros", "process", "rt-multi-thread", "sync", "time", "signal"] }
 tokio-tungstenite = { version = "0.28", default-features = false, features = ["connect", "rustls-tls-native-roots"] }

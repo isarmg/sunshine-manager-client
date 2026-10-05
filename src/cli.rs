@@ -319,6 +319,7 @@ fn sunshine_adapter_error(error: crate::adapter::AdapterError) -> Failure {
             fail(2, "invalid_sunshine_configuration")
         }
         crate::adapter::AdapterError::ResourceConflict => fail(9, "sunshine_resource_conflict"),
+        crate::adapter::AdapterError::PairingRejected => fail(9, "moonlight_pairing_failed"),
         crate::adapter::AdapterError::UnsupportedCapability => {
             fail(10, "sunshine_capability_unavailable")
         }

@@ -250,7 +250,7 @@ impl ManagerConnection {
                                     execution.completed.remove(&task.operation_id);
                                 }
                                 let id = task.operation_id.clone();
-                                let mutation = !matches!(task.command, sunshine_client_protocol::Command::ReadConfig {} | sunshine_client_protocol::Command::ListApplications {} | sunshine_client_protocol::Command::ListPairedClients {} | sunshine_client_protocol::Command::ReadLogs { .. } | sunshine_client_protocol::Command::ReadDiagnostics {} | sunshine_client_protocol::Command::ReadVirtualInputStatus {} | sunshine_client_protocol::Command::ReadServiceStatus {});
+                                let mutation = !matches!(task.command, sunshine_client_protocol::Command::ReadConfig {} | sunshine_client_protocol::Command::ListApplications {} | sunshine_client_protocol::Command::ListPendingPairings {} | sunshine_client_protocol::Command::ListPairedClients {} | sunshine_client_protocol::Command::ReadLogs { .. } | sunshine_client_protocol::Command::ReadDiagnostics {} | sunshine_client_protocol::Command::ReadVirtualInputStatus {} | sunshine_client_protocol::Command::ReadServiceStatus {});
                                 let executor = executor.clone();
                                 let deadline = (mode == sunshine_client_protocol::DeliveryMode::Execute).then(|| ExecutionDeadline::received(expires_at_unix_ms, remaining_ms));
                                 let handle = tokio::spawn(async move { executor.deliver_before(&task, mode, deadline).await });

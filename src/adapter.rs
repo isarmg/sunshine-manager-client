@@ -8,7 +8,7 @@ use sha2::{Digest, Sha256};
 use sunshine_client_protocol::{
     ApplicationRef, ApplicationSpec, ApplicationView, ApplicationsSnapshot, ConfigSnapshot,
     DriverStatus, Effectiveness, LogCursor, LogPage, MaintenanceAction, PairedClient,
-    PairedClientsSnapshot, ServiceAction, ServiceState, VirtualInputStatus,
+    PairedClientsSnapshot, PendingPairing, ServiceAction, ServiceState, VirtualInputStatus,
 };
 use tokio_rustls::rustls::{
     ClientConfig, DigitallySignedStruct, Error as TlsError, SignatureScheme,
@@ -49,6 +49,8 @@ pub enum AdapterError {
     ResourceConflict,
     #[error("the locally selected adapter does not support this capability")]
     UnsupportedCapability,
+    #[error("Sunshine did not complete the Moonlight pairing handshake")]
+    PairingRejected,
 }
 
 fn bounded_version_diagnostic(value: &str) -> Option<String> {
@@ -199,6 +201,13 @@ impl Configuration {
 #[async_trait]
 pub trait Sunshine: Send {
     fn set_execution_deadline(&mut self, _deadline: Option<crate::engine::ExecutionDeadline>) {}
+    async fn save_overwrite(
+        &mut self,
+        _before: &Configuration,
+        configuration: &Configuration,
+    ) -> Result<(), AdapterError> {
+        self.save(configuration).await
+    }
     async fn save_guarded(
         &mut self,
         expected: &str,
@@ -246,6 +255,10 @@ pub trait Sunshine: Send {
         _pin: &str,
         _name: &str,
     ) -> Result<(), AdapterError> {
+        Err(AdapterError::UnsupportedCapability)
+    }
+
+    async fn pending_pairings(&mut self) -> Result<Vec<PendingPairing>, AdapterError> {
         Err(AdapterError::UnsupportedCapability)
     }
     async fn paired_clients(&mut self) -> Result<PairedClientsSnapshot, AdapterError> {
@@ -507,6 +520,11 @@ impl LocalSunshine {
         );
         if let Some(body) = body {
             *request.body_mut() = Some(body.into());
+        }
+        // /api/pin waits for Moonlight's cryptographic handshake, not just PIN acceptance.
+        // Keep this inside the executor's 90-second budget without repeating the POST.
+        if request.method() == Method::POST && path == "/api/pin" {
+            *request.timeout_mut() = Some(Duration::from_secs(75));
         }
         // Non-browser local client: no Origin/Referer. The pinned release explicitly supports this.
         let (status, bytes) = {
@@ -915,6 +933,25 @@ impl Sunshine for LocalSunshine {
         self.service.deadline = deadline.clone();
         self.deadline = deadline;
     }
+    async fn save_overwrite(
+        &mut self,
+        before: &Configuration,
+        configuration: &Configuration,
+    ) -> Result<(), AdapterError> {
+        if let Some(backup) = &self.backup {
+            let bytes = serde_json::to_vec(&json!({
+                "before_revision": before.revision(),
+                "target_revision": configuration.revision(),
+                "configuration": before.fields
+            }))
+            .map_err(|_| AdapterError::UnsafeConfiguration)?;
+            backup
+                .put("latest.json", &bytes)
+                .map_err(|_| AdapterError::UnsafeConfiguration)?;
+        }
+        self.require_effect_budget()?;
+        self.save(configuration).await
+    }
     async fn save_guarded(
         &mut self,
         expected: &str,
@@ -1084,16 +1121,39 @@ impl Sunshine for LocalSunshine {
         pin: &str,
         name: &str,
     ) -> Result<(), AdapterError> {
-        self.request(
-            Method::POST,
-            "/api/pin",
-            Some(
-                serde_json::to_vec(&json!({"pairing_id":pairing_id,"pin":pin,"name":name}))
-                    .map_err(|_| AdapterError::UnsafeConfiguration)?,
-            ),
+        let bytes = self
+            .request_bytes(
+                Method::POST,
+                "/api/pin",
+                Some(
+                    serde_json::to_vec(&json!({"pairing_id":pairing_id,"pin":pin,"name":name}))
+                        .map_err(|_| AdapterError::UnsafeConfiguration)?,
+                ),
+            )
+            .await?;
+        let value: Value =
+            serde_json::from_slice(&bytes).map_err(|_| AdapterError::UnsafeConfiguration)?;
+        match value.get("status").and_then(Value::as_bool) {
+            Some(true) => Ok(()),
+            Some(false) => Err(AdapterError::PairingRejected),
+            None => Err(AdapterError::UnsafeConfiguration),
+        }
+    }
+
+    async fn pending_pairings(&mut self) -> Result<Vec<PendingPairing>, AdapterError> {
+        let bytes = self.request_bytes(Method::GET, "/api/pin", None).await?;
+        let value: Value =
+            serde_json::from_slice(&bytes).map_err(|_| AdapterError::UnsafeConfiguration)?;
+        let pairings: Vec<PendingPairing> = serde_json::from_value(
+            value
+                .get("pairings")
+                .cloned()
+                .ok_or(AdapterError::UnsafeConfiguration)?,
         )
-        .await?;
-        Ok(())
+        .map_err(|_| AdapterError::UnsafeConfiguration)?;
+        sunshine_client_protocol::validate_pending_pairings(&pairings)
+            .map_err(|_| AdapterError::UnsafeConfiguration)?;
+        Ok(pairings)
     }
 
     async fn paired_clients(&mut self) -> Result<PairedClientsSnapshot, AdapterError> {

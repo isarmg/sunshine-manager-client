@@ -370,6 +370,52 @@ async fn protocol_v2_uses_fixed_sunshine_resources_and_reconciles_application_re
 
 #[tokio::test]
 #[ignore = "requires loopback sockets and openssl"]
+async fn moonlight_pending_requests_need_no_status_flag_and_confirm_completed_or_failed_handshake()
+{
+    let temporary = tempfile::tempdir().unwrap();
+    certificates(temporary.path());
+    let id = "0123456789abcdef0123456789abcdef";
+    let fixture = serve(temporary.path(), vec![
+        response(serde_json::json!({"pairings":[{"id":id,"name":"Moonlight TV","address":"192.168.1.20"}]})),
+        response(serde_json::json!({"status":true})),
+        response(serde_json::json!({"status":false})),
+        response(serde_json::json!({"pairings":[{"id":"wrong","name":"TV","address":"192.168.1.20"}]})),
+    ]).await;
+    let mut sunshine = adapter(&fixture);
+    let pending = sunshine.pending_pairings().await.unwrap();
+    assert_eq!(
+        pending,
+        vec![PendingPairing {
+            id: id.into(),
+            name: "Moonlight TV".into(),
+            address: "192.168.1.20".into()
+        }]
+    );
+    sunshine
+        .submit_pairing_pin(&pending[0].id, "1234", &pending[0].name)
+        .await
+        .unwrap();
+    assert_eq!(
+        sunshine
+            .submit_pairing_pin(&pending[0].id, "5678", &pending[0].name)
+            .await
+            .unwrap_err(),
+        AdapterError::PairingRejected
+    );
+    assert_eq!(
+        sunshine.pending_pairings().await.unwrap_err(),
+        AdapterError::UnsafeConfiguration
+    );
+    let requests = fixture.requests.lock().unwrap();
+    assert!(String::from_utf8_lossy(&requests[0]).starts_with("GET /api/pin "));
+    let post = String::from_utf8_lossy(&requests[1]);
+    assert!(post.starts_with("POST /api/pin "));
+    assert!(post.contains(id));
+    assert!(post.contains("\"pin\":\"1234\""));
+}
+
+#[tokio::test]
+#[ignore = "requires loopback sockets and openssl"]
 async fn sunshine_http_credentials_api_and_version_failures_are_distinct() {
     let temporary = tempfile::tempdir().unwrap();
     certificates(temporary.path());
@@ -483,6 +529,85 @@ fn credentials_are_not_formatted_in_adapter_errors() {
     assert_eq!(
         AdapterError::ApiUnavailable.to_string(),
         "Sunshine HTTPS API is unavailable"
+    );
+}
+
+#[tokio::test]
+#[ignore = "requires loopback sockets and openssl"]
+async fn real_https_overwrite_preserves_local_fields_and_backs_up_current_configuration() {
+    let temporary = tempfile::tempdir().unwrap();
+    certificates(temporary.path());
+    let mut before = config("40");
+    before["min_threads"] = serde_json::json!("4");
+    before["amd_usage"] = serde_json::json!("lowlatency");
+    before["unmanaged"] = serde_json::json!("changed-since-page-opened");
+    let mut after = config("29");
+    after["amd_usage"] = serde_json::json!("lowlatency");
+    after["unmanaged"] = serde_json::json!("changed-since-page-opened");
+    let fixture = serve(
+        temporary.path(),
+        vec![
+            response(before),
+            response(serde_json::json!({"status": true})),
+            response(after),
+        ],
+    )
+    .await;
+    let state_root = temporary.path().join("state");
+    sunshine_client::storage::prepare_root(&state_root).unwrap();
+    let backup_path = state_root.join("config-backups");
+    let local = adapter(&fixture)
+        .with_backup_directory(&backup_path)
+        .unwrap();
+    let binding = Binding {
+        manager_id: uuid::Uuid::from_u128(1),
+        device_id: uuid::Uuid::from_u128(2),
+        installation_id: uuid::Uuid::from_u128(3),
+    };
+    let set = std::collections::BTreeMap::from([("qp".into(), config::FieldValue::Integer(29))]);
+    let remove = config::FIELD_DEFINITIONS
+        .iter()
+        .filter(|field| {
+            field.operating_systems.contains(&"linux_x86_64") && !set.contains_key(field.key)
+        })
+        .map(|field| field.key.to_owned())
+        .collect();
+    let task = Task {
+        protocol: PROTOCOL.into(),
+        operation_id: format!("op_{}", uuid::Uuid::new_v4()),
+        binding: binding.clone(),
+        permission: Permission::WriteConfig,
+        command: Command::SaveConfig {
+            set,
+            remove,
+            restart_policy: RestartPolicy::Manual,
+        },
+    };
+    let executor = Executor::new(binding, local, JournalFixture::default());
+    let result = executor.deliver(&task, DeliveryMode::Execute).await;
+    assert!(matches!(result, Report::ConfigSaved { .. }), "{result:?}");
+    assert_eq!(result, executor.deliver(&task, DeliveryMode::Execute).await);
+    let requests = fixture.requests.lock().unwrap();
+    assert_eq!(requests.len(), 3);
+    let saved = String::from_utf8_lossy(&requests[1]);
+    assert!(saved.starts_with("POST /api/config "));
+    let body: serde_json::Value =
+        serde_json::from_str(saved.split_once("\r\n\r\n").unwrap().1).unwrap();
+    assert_eq!(body["qp"], "29");
+    assert!(body.get("min_threads").is_none());
+    assert_eq!(body["amd_usage"], "lowlatency");
+    assert_eq!(body["file_apps"], "/do-not-expose/apps.json");
+    assert_eq!(body["unmanaged"], "changed-since-page-opened");
+    drop(executor);
+    let backup_store =
+        sunshine_client::storage::ProtectedState::open_readonly(&backup_path).unwrap();
+    let backup: serde_json::Value =
+        serde_json::from_slice(&backup_store.read("latest.json").unwrap().unwrap()).unwrap();
+    assert_eq!(backup["configuration"]["qp"], "40");
+    assert_eq!(backup["configuration"]["min_threads"], "4");
+    assert_eq!(
+        backup["configuration"]["file_apps"],
+        "/do-not-expose/apps.json"
     );
 }
 

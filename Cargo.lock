@@ -1411,7 +1411,7 @@ checksum = "13c2bddecc57b384dee18652358fb23172facb8a2c51ccc10d74c157bdea3292"
 
 [[package]]
 name = "sunshine-client"
-version = "0.3.0"
+version = "0.3.1"
 dependencies = [
  "async-trait",
  "base64 0.22.1",
@@ -1440,8 +1440,8 @@ dependencies = [
 
 [[package]]
 name = "sunshine-client-protocol"
-version = "0.3.0"
-source = "git+https://github.com/isarmg/sunshine-manager-server.git?rev=672358672061607496487d97b998b2696aed0fa1#672358672061607496487d97b998b2696aed0fa1"
+version = "0.4.0"
+source = "git+https://github.com/isarmg/sunshine-manager-server.git?rev=2998876d091e2c1666de36b86f7417f80f04fded#2998876d091e2c1666de36b86f7417f80f04fded"
 dependencies = [
  "serde",
  "serde_json",

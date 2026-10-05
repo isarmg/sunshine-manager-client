@@ -30,6 +30,8 @@ struct Fixture {
     fail_read: bool,
     unchanged_restart: bool,
     conflict_on_second_read: bool,
+    pairing_calls: usize,
+    reject_pairing: bool,
 }
 
 impl Default for Fixture {
@@ -44,6 +46,8 @@ impl Default for Fixture {
             fail_read: false,
             unchanged_restart: false,
             conflict_on_second_read: false,
+            pairing_calls: 0,
+            reject_pairing: false,
         }
     }
 }
@@ -53,6 +57,27 @@ struct FakeSunshine(Arc<Mutex<Fixture>>);
 
 #[async_trait]
 impl Sunshine for FakeSunshine {
+    async fn pending_pairings(&mut self) -> Result<Vec<PendingPairing>, AdapterError> {
+        Ok(vec![PendingPairing {
+            id: "a".repeat(32),
+            name: "Moonlight TV".into(),
+            address: "192.168.1.20".into(),
+        }])
+    }
+    async fn submit_pairing_pin(
+        &mut self,
+        _id: &str,
+        _pin: &str,
+        _name: &str,
+    ) -> Result<(), AdapterError> {
+        let mut fixture = self.0.lock().unwrap();
+        fixture.pairing_calls += 1;
+        if fixture.reject_pairing {
+            Err(AdapterError::PairingRejected)
+        } else {
+            Ok(())
+        }
+    }
     async fn read(&mut self) -> Result<Configuration, AdapterError> {
         let mut fixture = self.0.lock().unwrap();
         fixture.reads += 1;
@@ -168,6 +193,124 @@ fn restart() -> Task {
         administrator_confirmed: true,
     };
     task
+}
+
+#[tokio::test]
+async fn moonlight_pin_is_sent_once_and_confirmed_failure_is_terminal() {
+    for rejected in [false, true] {
+        let sunshine = FakeSunshine::default();
+        sunshine.0.lock().unwrap().reject_pairing = rejected;
+        let executor = Executor::new(binding(), sunshine.clone(), MemoryJournal::default());
+        let mut task = patch();
+        task.permission = Permission::ManagePairing;
+        task.command = Command::SubmitPairingPin {
+            pairing_id: "a".repeat(32),
+            pin: "1234".into(),
+            name: "Moonlight TV".into(),
+        };
+        let expected = if rejected {
+            Report::Rejected {
+                reason: Rejection::PairingFailed,
+            }
+        } else {
+            Report::PairingPinSubmitted {}
+        };
+        assert_eq!(
+            executor.deliver(&task, DeliveryMode::Execute).await,
+            expected
+        );
+        assert_eq!(
+            executor.deliver(&task, DeliveryMode::Execute).await,
+            expected
+        );
+        assert_eq!(
+            executor.deliver(&task, DeliveryMode::InspectOnly).await,
+            expected
+        );
+        assert_eq!(sunshine.0.lock().unwrap().pairing_calls, 1);
+        task.operation_id = format!("op_{}", Uuid::new_v4());
+        task.command = Command::ListPendingPairings {};
+        let Report::PendingPairingsRead { pairings } =
+            executor.deliver(&task, DeliveryMode::Execute).await
+        else {
+            panic!("pending pairing request was not returned")
+        };
+        assert_eq!(pairings[0].id, "a".repeat(32));
+    }
+}
+
+fn overwrite() -> Task {
+    let mut task = patch();
+    let set = BTreeMap::from([
+        ("qp".into(), FieldValue::Integer(29)),
+        ("sunshine_name".into(), FieldValue::Text("主机".into())),
+    ]);
+    let remove = config::FIELD_DEFINITIONS
+        .iter()
+        .filter(|field| {
+            field.operating_systems.contains(&"linux_x86_64") && !set.contains_key(field.key)
+        })
+        .map(|field| field.key.to_owned())
+        .collect();
+    task.command = Command::SaveConfig {
+        set,
+        remove,
+        restart_policy: RestartPolicy::Manual,
+    };
+    task
+}
+
+#[tokio::test]
+async fn overwrite_uses_frozen_managed_snapshot_and_current_local_only_settings() {
+    let sunshine = FakeSunshine::default();
+    sunshine.0.lock().unwrap().configuration = Configuration::from_response(json!({
+        "status": true, "platform": "linux", "version": SUNSHINE_VERSION,
+        "qp": "40", "sunshine_name": "Changed locally", "min_threads": "4",
+        "amd_usage": "lowlatency",
+        "global_prep_cmd": "[{\"do\":\"new-local-command\"}]",
+        "file_apps": "/new/local/apps.json", "unmanaged_option": "new-local-value"
+    }))
+    .unwrap();
+    let executor = Executor::new(binding(), sunshine.clone(), MemoryJournal::default());
+    let task = overwrite();
+    let report = executor.deliver(&task, DeliveryMode::Execute).await;
+    let Report::ConfigSaved { snapshot } = &report else {
+        panic!("{report:?}")
+    };
+    assert_eq!(snapshot.fields["qp"], "29");
+    assert_eq!(snapshot.fields["sunshine_name"], "主机");
+    assert!(!snapshot.fields.contains_key("min_threads"));
+    assert!(!snapshot.fields.contains_key("global_prep_cmd"));
+    let expected = Configuration::from_response(json!({
+        "status": true, "platform": "linux", "version": SUNSHINE_VERSION,
+        "qp": "29", "sunshine_name": "主机",
+        "amd_usage": "lowlatency",
+        "global_prep_cmd": "[{\"do\":\"new-local-command\"}]",
+        "file_apps": "/new/local/apps.json", "unmanaged_option": "new-local-value"
+    }))
+    .unwrap();
+    assert_eq!(snapshot.revision, expected.revision());
+    assert_eq!(report, executor.deliver(&task, DeliveryMode::Execute).await);
+    let fixture = sunshine.0.lock().unwrap();
+    assert_eq!(fixture.configuration.revision(), expected.revision());
+    assert_eq!(fixture.saves, 1);
+    assert_eq!(fixture.restarts, 0);
+}
+
+#[tokio::test]
+async fn overwrite_reconciles_a_lost_receipt_without_repeating_the_write() {
+    let sunshine = FakeSunshine::default();
+    sunshine.0.lock().unwrap().lose_write_receipt = true;
+    let executor = Executor::new(binding(), sunshine.clone(), MemoryJournal::default());
+    let task = overwrite();
+    let first = executor.deliver(&task, DeliveryMode::Execute).await;
+    assert!(matches!(first, Report::ConfigSaved { .. }));
+    assert_eq!(
+        first,
+        executor.deliver(&task, DeliveryMode::InspectOnly).await
+    );
+    assert_eq!(first, executor.deliver(&task, DeliveryMode::Execute).await);
+    assert_eq!(sunshine.0.lock().unwrap().saves, 1);
 }
 
 #[tokio::test]

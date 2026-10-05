@@ -396,7 +396,8 @@ pub async fn pair(state_path: &Path) -> Result<(), ProvisionError> {
             crate::adapter::AdapterError::UnsafeConfiguration
             | crate::adapter::AdapterError::InvalidLocalEndpoint
             | crate::adapter::AdapterError::ResourceConflict
-            | crate::adapter::AdapterError::UnsupportedCapability => ProvisionError::Configuration,
+            | crate::adapter::AdapterError::UnsupportedCapability
+            | crate::adapter::AdapterError::PairingRejected => ProvisionError::Configuration,
         })?
         .sunshine_version()
         .to_owned();
