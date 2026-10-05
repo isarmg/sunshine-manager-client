@@ -68,6 +68,36 @@ Sunshine 默认使用本机自签名证书。由于连接被限制在内核回�
 
 ## 已有配置、升级与故障处理
 
+Windows 服务启动后立即停止时，在管理员 PowerShell 中使用安装目录里的同一个程序检查退出码和前台错误：
+
+```powershell
+$Client = 'C:\Program Files\SunshineClient\sunshine-client.exe'
+sc.exe query SunshineClient
+& $Client service status --format json
+& $Client logs --tail 100
+& $Client run --state 'C:\ProgramData\SunshineClient' --format json
+```
+
+前台 `run` 需要后台服务已停止；正常运行时保持前台，用 Ctrl+C 停止后再启动服务。
+它复用保存的身份，不发起配对。启动失败的 `error.step` 区分 `maintenance`、`state_root`、
+`provisioning`、`identity`、`runtime_status`、`execution_journal` 与 `config_backups`。
+`service status` 保留 SCM 的 `win32_exit_code` 与 `service_exit_code`：1001 表示受保护状态或
+执行日志错误，1002 表示配置/未配对，1006 表示 Manager 凭据拒绝，1099 表示其他运行失败。
+
+服务入口另将失败写入 Windows Application 日志，来源 `SunshineClient`。该记录独立于配置、
+SQLite 和状态管道，使用下面的命令查看插入文本，不依赖事件消息资源 DLL：
+
+```powershell
+Get-WinEvent -LogName Application -MaxEvents 100 |
+    Where-Object { $_.ProviderName -eq 'SunshineClient' } |
+    Select-Object TimeCreated, Id, @{Name='Error';Expression={$_.Properties[0].Value}} |
+    Format-List
+```
+
+`logs` 读取 SCM 生命周期事件，固定使用 UTF-8；系统事件解析失败会返回 `logs_unavailable`，
+不会再归因为受保护状态损坏。`runtime_summary_unavailable` 只表示当前没有可读取的运行进程，
+不能据此判断服务从未加载过配置或从未建立过状态管道。
+
 `setup` 按配置、配对、服务注册、启动策略、运行状态和连接顺序执行后置验证。交互终端会逐步显示 `verified`；JSON 失败响应中的 `error.step` 指明失败关卡，`error.code` 和 `error.message` 给出稳定原因，操作系统服务命令失败时 `error.detail` 保留经过控制字符清理和长度限制的原始诊断。服务必须真实运行，连接验证固定执行；未运行或无法确认连接时返回对应失败。设置写入完成与连接确认是不同层次；如果返回 `connection_unconfirmed`，保留现有身份并分别运行 `doctor --network` 和 `doctor --sunshine`，不能把它视为 Manager 与 Sunshine 均已连接，也不要删除状态重新配对。
 
 当前 v2 有效身份无需重复初始化或配对。再次运行 `setup` 会复用身份，待处理事务会调用 `pair resume`；`config show --format json` 查看脱敏配置与修订，候选配置只支持 `sunshine_endpoint`；用 `config validate/diff/apply --file <绝对路径>`，提交还需要 `--expected-revision <当前修订>`，写入前停止服务。配对后直接启用当前平台支持的 Sunshine 专用管理能力。

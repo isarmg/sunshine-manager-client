@@ -43,6 +43,14 @@ fn current_sunshine_version() -> String {
 }
 #[derive(Debug, thiserror::Error)]
 pub enum ProvisionError {
+    #[error("runtime startup failed at {stage}: {source}")]
+    Startup {
+        stage: &'static str,
+        #[source]
+        source: Box<ProvisionError>,
+    },
+    #[error("runtime status endpoint unavailable: {0}")]
+    RuntimeStatus(#[source] std::io::Error),
     #[error(transparent)]
     Storage(#[from] StorageError),
     #[error("invalid protected bootstrap configuration")]
@@ -93,6 +101,13 @@ pub enum ProvisionError {
 }
 fn config_error(_: impl std::fmt::Debug) -> ProvisionError {
     ProvisionError::Configuration
+}
+
+fn startup_error(stage: &'static str, error: impl Into<ProvisionError>) -> ProvisionError {
+    ProvisionError::Startup {
+        stage,
+        source: Box::new(error.into()),
+    }
 }
 
 fn classify_state_document(bytes: &[u8], artifact: &'static str) -> Result<(), ProvisionError> {
@@ -405,16 +420,20 @@ pub async fn pair(state_path: &Path) -> Result<(), ProvisionError> {
     Ok(())
 }
 pub async fn run(state_path: &Path, shutdown: watch::Receiver<bool>) -> Result<(), ProvisionError> {
-    let _maintenance = crate::storage::MaintenanceGuard::acquire(state_path)?;
-    let _root = crate::storage::prepare_root(state_path)?;
-    let store = ProtectedState::open(&state_path.join("provisioning"))?;
+    let _maintenance = crate::storage::MaintenanceGuard::acquire(state_path)
+        .map_err(|error| startup_error("maintenance", error))?;
+    let _root = crate::storage::prepare_root(state_path)
+        .map_err(|error| startup_error("state_root", error))?;
+    let store = ProtectedState::open(&state_path.join("provisioning"))
+        .map_err(|error| startup_error("provisioning", error))?;
     // Service startup never enrolls, resumes pairing, or rotates credentials.
     let bytes = Zeroizing::new(
         store
-            .read("identity.json")?
-            .ok_or(ProvisionError::Unpaired)?,
+            .read("identity.json")
+            .map_err(|error| startup_error("identity", error))?
+            .ok_or_else(|| startup_error("identity", ProvisionError::Unpaired))?,
     );
-    let identity = decode_identity(&bytes)?;
+    let identity = decode_identity(&bytes).map_err(|error| startup_error("identity", error))?;
     if !identity.enrolled {
         return Err(ProvisionError::Unpaired);
     }
@@ -423,10 +442,10 @@ pub async fn run(state_path: &Path, shutdown: watch::Receiver<bool>) -> Result<(
         identity.binding.installation_id.to_string(),
         crate::cli::settings_revision(&identity.config).map_err(config_error)?,
     )
-    .map_err(|_| ProvisionError::Storage(StorageError::Unsafe))?;
+    .map_err(|error| startup_error("runtime_status", ProvisionError::RuntimeStatus(error)))?;
     drop(store); // Do not retain the short provisioning lock across network waits.
-    let journal =
-        FileJournal::open(&state_path.join("journal")).map_err(|_| ProvisionError::Journal)?;
+    let journal = FileJournal::open(&state_path.join("journal"))
+        .map_err(|_| startup_error("execution_journal", ProvisionError::Journal))?;
     let capabilities = Capabilities {
         protocol: PROTOCOL.into(),
         client_version: env!("CARGO_PKG_VERSION").into(),
@@ -451,7 +470,12 @@ pub async fn run(state_path: &Path, shutdown: watch::Receiver<bool>) -> Result<(
             .config
             .adapter()?
             .with_backup_directory(&state_path.join("config-backups"))
-            .map_err(|_| ProvisionError::Storage(StorageError::Unsafe))?,
+            .map_err(|_| {
+                startup_error(
+                    "config_backups",
+                    ProvisionError::Storage(StorageError::Unsafe),
+                )
+            })?,
         journal,
     ));
     let connection =

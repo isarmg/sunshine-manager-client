@@ -198,3 +198,40 @@ fn configuration_revision_conflict_cannot_change_settings() {
     assert_eq!(result.0, 5, "{}", result.1);
     assert_eq!(call(&state, &["config", "show"], None).1, before.1);
 }
+
+#[test]
+#[ignore = "requires Unix socket publication"]
+fn failed_runtime_reports_the_journal_gate_and_preserves_pairing() {
+    // The runtime publishes a Unix socket; workspace TMPDIR may exceed sun_path.
+    let temp = tempfile::tempdir_in(Path::new("/tmp").canonicalize().unwrap()).unwrap();
+    let state = temp.path().join("state");
+    let _root = sunshine_client::storage::prepare_root(&state).unwrap();
+    let store = ProtectedState::open(&state.join("provisioning")).unwrap();
+    let identity = serde_json::to_vec(&json!({
+        "binding": {"manager_id": uuid::Uuid::new_v4(), "device_id": uuid::Uuid::new_v4(), "installation_id": uuid::Uuid::new_v4()},
+        "credential": "a".repeat(64), "enrolled": true,
+        "config": {"manager_endpoint": "wss://127.0.0.1:9/sunshine-client/v3/connect", "enrollment_token": "",
+            "sunshine_endpoint": "https://127.0.0.1:9/", "sunshine_username": "fixture", "sunshine_password": "local-only-secret"}
+    })).unwrap();
+    store.put("identity.json", &identity).unwrap();
+    drop(store);
+    let journal = state.join("journal");
+    fs::create_dir(&journal).unwrap();
+    fs::set_permissions(&journal, fs::Permissions::from_mode(0o700)).unwrap();
+    let evidence = journal.join("op_00000000-0000-4000-8000-000000000001.json");
+    private_file(&evidence, b"corrupt-important-execution-record");
+
+    let (exit, result) = call(&state, &["run"], None);
+    assert_eq!(exit, 10, "{result}");
+    assert_eq!(result["error"]["code"], "important_state_incompatible");
+    assert_eq!(result["error"]["step"], "execution_journal");
+    assert!(!result.to_string().contains("local-only-secret"));
+    let store = ProtectedState::open_readonly(&state.join("provisioning")).unwrap();
+    assert_eq!(store.read("identity.json").unwrap().unwrap(), identity);
+    assert_eq!(
+        fs::read(&evidence).unwrap(),
+        b"corrupt-important-execution-record"
+    );
+    // Unavailable status after exit does not prove that publication never ran.
+    assert!(sunshine_client::runtime_status::read(&state, None).is_none());
+}

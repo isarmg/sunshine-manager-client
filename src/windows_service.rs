@@ -10,6 +10,43 @@ use windows_service::{
 };
 const NAME: &str = "SunshineClient";
 
+fn report_failure(message: &str) {
+    use std::os::windows::ffi::OsStrExt;
+    use windows_sys::Win32::System::EventLog::{
+        DeregisterEventSource, EVENTLOG_ERROR_TYPE, RegisterEventSourceW, ReportEventW,
+    };
+    let wide = |text: &str| -> Vec<u16> {
+        std::ffi::OsStr::new(text)
+            .encode_wide()
+            .chain(Some(0))
+            .collect()
+    };
+    let name = wide(NAME);
+    let message_units = wide(message);
+    // Event Log is independent of configuration, SQLite stores and the runtime
+    // status pipe, so failures can be recorded before protected state opens.
+    unsafe {
+        let source = RegisterEventSourceW(std::ptr::null(), name.as_ptr());
+        if !source.is_null() {
+            let strings = [message_units.as_ptr()];
+            let _ = ReportEventW(
+                source,
+                EVENTLOG_ERROR_TYPE,
+                0,
+                1000,
+                std::ptr::null_mut(),
+                1,
+                0,
+                strings.as_ptr(),
+                std::ptr::null(),
+            );
+            let _ = DeregisterEventSource(source);
+        }
+    }
+    use std::io::Write;
+    let _ = writeln!(std::io::stderr(), "{message}");
+}
+
 #[repr(u32)]
 #[derive(Clone, Copy)]
 enum ServiceFailure {
@@ -26,6 +63,7 @@ enum ServiceFailure {
 fn service_failure(error: &sunshine_client::provisioning::ProvisionError) -> ServiceFailure {
     use sunshine_client::provisioning::ProvisionError;
     match error {
+        ProvisionError::Startup { source, .. } => service_failure(source),
         ProvisionError::Storage(_)
         | ProvisionError::StateDocumentCorrupt { .. }
         | ProvisionError::StateSchemaUnsupported { .. }
@@ -54,10 +92,36 @@ fn service_failure(error: &sunshine_client::provisioning::ProvisionError) -> Ser
 }
 define_windows_service!(entry, service_main);
 pub fn dispatch() -> windows_service::Result<()> {
-    service_dispatcher::start(NAME, entry)
+    // Panic payloads can contain arbitrary data. Persist only the source
+    // location, then preserve Rust's normal console panic diagnostics.
+    let previous = std::panic::take_hook();
+    std::panic::set_hook(Box::new(move |panic| {
+        let location = panic.location().map(|location| {
+            format!(
+                "{}:{}:{}",
+                location.file(),
+                location.line(),
+                location.column()
+            )
+        });
+        report_failure(&format!(
+            "sunshine-client service panic: code=1099; location={}",
+            location.as_deref().unwrap_or("unknown")
+        ));
+        previous(panic);
+    }));
+    service_dispatcher::start(NAME, entry).inspect_err(|error| {
+        report_failure(&format!(
+            "sunshine-client service dispatcher failed: {error}"
+        ));
+    })
 }
 fn service_main(_: Vec<OsString>) {
-    let _ = run();
+    if let Err(error) = run() {
+        report_failure(&format!(
+            "sunshine-client service bootstrap failed: {error}"
+        ));
+    }
 }
 fn run() -> windows_service::Result<()> {
     let (tx, rx) = tokio::sync::watch::channel(false);
@@ -92,15 +156,22 @@ fn run() -> windows_service::Result<()> {
                     rx,
                 ))
                 .map_err(|error| {
-                    eprintln!("sunshine-client service stopped: {error}");
-                    service_failure(&error)
+                    let failure = service_failure(&error);
+                    report_failure(&format!(
+                        "sunshine-client service stopped: code={}; {error}",
+                        failure as u32
+                    ));
+                    failure
                 }),
             Err(error) => {
-                eprintln!("sunshine-client service runtime initialization failed: {error}");
+                report_failure(&format!(
+                    "sunshine-client service runtime initialization failed: code=1099; {error}"
+                ));
                 Err(ServiceFailure::RuntimeFailure)
             }
         }
     } else {
+        report_failure("sunshine-client service arguments invalid: code=1002");
         Err(ServiceFailure::Configuration)
     };
     let exit_code = match result {

@@ -97,6 +97,12 @@ impl ProductErrorCatalog for SunshineErrorCatalog {
             "service_state_unconfirmed" => Some(
                 "The registered Sunshine Client service did not remain running; it may have exited during startup.",
             ),
+            "runtime_status_unavailable" => {
+                Some("The local runtime status endpoint could not be created.")
+            }
+            "runtime_initialization_failed" => {
+                Some("The local asynchronous runtime could not be initialized.")
+            }
             _ => None,
         }
     }
@@ -138,7 +144,9 @@ impl ProductErrorCatalog for SunshineErrorCatalog {
                 Some("Upgrade local Sunshine to a supported current version.".into())
             }
             "service_state_unconfirmed" => Some(format!(
-                "Run `sudo {product} logs --tail 100`, then `sudo {product} service status --format json` to inspect the startup failure."
+                "Run `{}{product} logs --tail 100`, then `{}{product} service status --format json` to inspect the startup failure.",
+                if cfg!(windows) { "" } else { "sudo " },
+                if cfg!(windows) { "" } else { "sudo " }
             )),
             "pairing_state_incompatible" => Some(format!(
                 "Create a new Sunshine instance authorization code, then run `{product} pair replace --interactive`; the incompatible account document will be archived."
@@ -217,6 +225,10 @@ fn storage_error(error: impl std::fmt::Debug + std::any::Any) -> Failure {
 }
 fn provision_error(e: ProvisionError) -> Failure {
     match e {
+        ProvisionError::Startup { stage, source } => provision_error(*source).at_step(stage),
+        ProvisionError::RuntimeStatus(error) => {
+            fail(6, "runtime_status_unavailable").with_detail(error)
+        }
         ProvisionError::Configuration => fail(2, "invalid_configuration"),
         ProvisionError::InvalidAuthorizationCode => fail(2, "invalid_authorization_code"),
         ProvisionError::StateDocumentCorrupt { artifact } => fail(4, "pairing_state_incompatible")
@@ -1520,7 +1532,11 @@ fn remove_installer_tree(path: &Path) -> std::io::Result<()> {
     std::fs::remove_dir_all(path)
 }
 pub fn run(path: &Path) -> Result<()> {
-    let rt = tokio::runtime::Runtime::new().map_err(storage_error)?;
+    let rt = tokio::runtime::Runtime::new().map_err(|error| {
+        fail(6, "runtime_initialization_failed")
+            .at_step("runtime")
+            .with_detail(error)
+    })?;
     rt.block_on(async {
         let (tx,rx)=tokio::sync::watch::channel(false);
         let stop=async {

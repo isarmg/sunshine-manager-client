@@ -37,6 +37,30 @@ def exercise(binary, seed, state, service_user=None):
         raise RuntimeError("new Windows Client service must use native automatic system startup")
     if platform.system() == "Linux" and initial["startup"] != "enabled":
         raise RuntimeError("fresh Linux installation must enable systemd startup before pairing")
+    if platform.system() == "Windows":
+        # Exercise the failure that ordinary live/offline fixtures never cover:
+        # SCM starts successfully, but runtime initialization has no identity.
+        # The cause must survive the process exit and logs must remain readable.
+        execute(["sc.exe", "start", "SunshineClient"])
+        deadline = time.monotonic() + 15
+        while True:
+            failed = cli("service", "status")
+            if failed["state"] == "stopped" and failed.get("service_exit_code") == 1002:
+                break
+            if time.monotonic() >= deadline:
+                raise RuntimeError(f"unpaired service did not preserve its startup exit code: {failed}")
+            time.sleep(0.1)
+        assert failed["win32_exit_code"] == 1066, failed
+        assert isinstance(cli("logs", "--tail", "100")["entries"], list)
+        events = execute([
+            "powershell.exe", "-NoProfile", "-NonInteractive", "-Command",
+            "$ErrorActionPreference='Stop'; [Console]::OutputEncoding=[Text.UTF8Encoding]::new($false); "
+            "Get-WinEvent -LogName Application -MaxEvents 100 | "
+            "Where-Object {$_.ProviderName -eq 'SunshineClient'} | "
+            "ForEach-Object {$_.Properties[0].Value}",
+        ])
+        if events.returncode or "runtime startup failed at identity" not in events.stdout:
+            raise RuntimeError("service failure did not leave a readable Application event")
     if execute([seed, state]).returncode:
         raise RuntimeError("protected acceptance fixture could not be created")
     if service_user and execute(["chown", "-R", service_user, state]).returncode:
