@@ -75,7 +75,7 @@ fn permissive_directory_and_path_traversal_are_rejected() {
 #[test]
 fn valid_large_log_result_survives_reopen_and_acknowledged_records_free_capacity() {
     use sunshine_client_protocol::{LogPage, Report};
-    let temporary = tempfile::tempdir().unwrap();
+    let temporary = tempfile::tempdir_in(std::env::temp_dir().canonicalize().unwrap()).unwrap();
     let path = temporary.path().join("journal");
     let mut journal = FileJournal::open(&path).unwrap();
     let mut large = record();

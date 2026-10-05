@@ -496,8 +496,10 @@ impl LocalSunshine {
         })
     }
 
+    // Windows backup state contains a Send but non-Sync SQLite connection. Keep
+    // the executor's exclusive borrow across awaits instead of requiring Sync.
     async fn request_bytes(
-        &self,
+        &mut self,
         method: Method,
         path: &str,
         body: Option<Vec<u8>>,
@@ -581,7 +583,7 @@ impl LocalSunshine {
     }
 
     async fn request(
-        &self,
+        &mut self,
         method: Method,
         path: &str,
         body: Option<Vec<u8>>,
