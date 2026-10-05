@@ -1,5 +1,5 @@
 {
-  "manager_endpoint": "wss://manager.example.org/sunshine-client/v2/connect",
+  "manager_endpoint": "wss://manager.example.org/sunshine-client/v3/connect",
   "enrollment_token": "REPLACE_WITH_INSTANCE_AUTHORIZATION_CODE",
   "sunshine_endpoint": "https://127.0.0.1:47990/",
   "sunshine_username": "REPLACE_LOCALLY",

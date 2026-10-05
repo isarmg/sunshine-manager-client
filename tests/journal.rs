@@ -11,6 +11,9 @@ fn record() -> ExecutionRecord {
         fingerprint: "a".repeat(64),
         effect: None,
         report: None,
+        acknowledged: false,
+        binding: None,
+        accepted_digest: None,
     }
 }
 
@@ -67,4 +70,45 @@ fn permissive_directory_and_path_traversal_are_rejected() {
     drop(journal);
     std::fs::set_permissions(&path, std::fs::Permissions::from_mode(0o755)).unwrap();
     assert!(FileJournal::open(&path).is_err());
+}
+
+#[test]
+fn valid_large_log_result_survives_reopen_and_acknowledged_records_free_capacity() {
+    use sunshine_client_protocol::{LogPage, Report};
+    let temporary = tempfile::tempdir().unwrap();
+    let path = temporary.path().join("journal");
+    let mut journal = FileJournal::open(&path).unwrap();
+    let mut large = record();
+    large.report = Some(Report::LogsRead {
+        page: LogPage {
+            revision: "b".repeat(64),
+            text: "x".repeat(24 * 1024),
+            start_offset: 0,
+            end_offset: 24 * 1024,
+            total_bytes: 24 * 1024,
+            previous: None,
+            redacted: false,
+        },
+    });
+    journal.create(ID, &large).unwrap();
+    drop(journal);
+    let mut journal = FileJournal::open(&path).unwrap();
+    assert_eq!(journal.load(ID).unwrap(), Some(large));
+    for index in 1..4100 {
+        let id = format!("op_{}", uuid::Uuid::from_u128(index));
+        let mut value = record();
+        value.report = Some(Report::Rejected {
+            reason: sunshine_client_protocol::Rejection::SunshineUnavailable,
+        });
+        journal.create(&id, &value).unwrap();
+        value.acknowledged = true;
+        value.report = None;
+        journal.replace(&id, &value).unwrap();
+    }
+    drop(journal);
+    let mut journal = FileJournal::open(&path).unwrap();
+    let compact_id = format!("op_{}", uuid::Uuid::from_u128(1));
+    assert!(journal.load(&compact_id).unwrap().unwrap().acknowledged);
+    assert!(journal.create(&compact_id, &record()).is_err());
+    assert_eq!(journal.pending_results().unwrap().len(), 1);
 }

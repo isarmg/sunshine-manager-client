@@ -346,7 +346,7 @@ impl PairInput {
             return Err(fail(2, "invalid_server_origin"));
         }
         url.set_scheme("wss").map_err(input_error)?;
-        url.set_path("/sunshine-client/v2/connect");
+        url.set_path("/sunshine-client/v3/connect");
         let b = Bootstrap {
             manager_endpoint: url.to_string(),
             enrollment_token: self.authorization_code,
@@ -818,7 +818,7 @@ fn setup(args: &Args, path: PathBuf) -> Result<Value> {
             expected
                 .set_scheme("wss")
                 .map_err(|_| fail(2, "invalid_server_origin").at_step("configuration"))?;
-            expected.set_path("/sunshine-client/v2/connect");
+            expected.set_path("/sunshine-client/v3/connect");
             if identity.config.manager_endpoint != expected.as_str() {
                 return Err(
                     fail(5, "server_replacement_requires_pair_replace").at_step("configuration")
@@ -1715,7 +1715,7 @@ mod setup_tests {
         let manifest: serde_json::Value =
             serde_json::from_str(include_str!("../compatibility.json")).unwrap();
         assert_eq!(manifest["sunshine_manager_protocol"], 2);
-        assert_eq!(sunshine_client_protocol::PROTOCOL, "sunshine-management/2");
+        assert_eq!(sunshine_client_protocol::PROTOCOL, "sunshine-management/3");
     }
 
     #[test]
@@ -1828,7 +1828,7 @@ mod setup_tests {
         let root = installer_test_root(&directory);
         crate::storage::prepare_root(&root).unwrap();
         let provisioning = root.join("provisioning");
-        let current = br#"{"manager_endpoint":"wss://manager.example/sunshine-client/v2/connect","enrollment_token":"token","sunshine_endpoint":"https://127.0.0.1:47990/","sunshine_username":"sunshine","sunshine_password":"password"}"#;
+        let current = br#"{"manager_endpoint":"wss://manager.example/sunshine-client/v3/connect","enrollment_token":"token","sunshine_endpoint":"https://127.0.0.1:47990/","sunshine_username":"sunshine","sunshine_password":"password"}"#;
         {
             let store = ProtectedState::open(&provisioning).unwrap();
             store.put("bootstrap.json", current).unwrap();

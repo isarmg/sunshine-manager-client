@@ -1,11 +1,11 @@
 //! Product WSS transport. No generic Client platform, URL passthrough or Manager credential logging.
 use crate::{
     adapter::Sunshine,
-    engine::{Executor, Journal},
+    engine::{ExecutionDeadline, Executor, Journal},
 };
 use futures_util::{SinkExt, StreamExt, stream::FuturesUnordered};
 use sarmg_client_runtime::RetryBackoff;
-use std::{future::Future, pin::Pin, sync::Arc, time::Duration};
+use std::{collections::BTreeMap, sync::Arc, time::Duration};
 use sunshine_client_protocol::{
     Binding, Capabilities, ClientMessage, ConfigSnapshot, MAX_MESSAGE_BYTES, ManagerMessage,
     PROTOCOL, Report, WEBSOCKET_SUBPROTOCOL, decode_manager_message,
@@ -27,7 +27,7 @@ use tokio_tungstenite::{
 use url::Url;
 use zeroize::Zeroizing;
 
-pub const CONNECT_PATH: &str = "/sunshine-client/v2/connect";
+pub const CONNECT_PATH: &str = "/sunshine-client/v3/connect";
 const IO_TIMEOUT: Duration = Duration::from_secs(10);
 const HEARTBEAT_INTERVAL: Duration = Duration::from_secs(15);
 const PEER_TIMEOUT: Duration = Duration::from_secs(45);
@@ -127,7 +127,16 @@ impl ManagerConnection {
         if capabilities.protocol != PROTOCOL {
             return Err(TransportError::Configuration);
         }
-        let mut mutation_completed = None;
+        let mut execution = ExecutionState::default();
+        for (id, record) in executor
+            .pending_results()
+            .await
+            .map_err(|_| TransportError::Configuration)?
+        {
+            if let Some(report) = record.report {
+                execution.completed.insert(id, (record.fingerprint, report));
+            }
+        }
         let mut backoff = RetryBackoff::new(Duration::from_secs(1), Duration::from_secs(60), 20)
             .map_err(|_| TransportError::Configuration)?;
         loop {
@@ -138,7 +147,7 @@ impl ManagerConnection {
             let result = tokio::select! {
                 biased;
                 _ = shutdown.changed() => return Ok(()),
-                result = self.session(&binding, &capabilities, executor.clone(), &health, &mut mutation_completed) => result,
+                result = self.session(&binding, &capabilities, executor.clone(), &health, &mut execution) => result,
             };
             crate::runtime_status::observe("manager_session", serde_json::json!("disconnected"));
             if matches!(
@@ -168,7 +177,7 @@ impl ManagerConnection {
         capabilities: &Capabilities,
         executor: Arc<Executor<A, J>>,
         health: &watch::Receiver<HealthObservation>,
-        mutation_completed: &mut Option<Instant>,
+        execution: &mut ExecutionState,
     ) -> Result<(), TransportError> {
         let mut socket = self.connect().await?;
         send(
@@ -176,14 +185,30 @@ impl ManagerConnection {
             ClientMessage::Hello {
                 binding: binding.clone(),
                 capabilities: capabilities.clone(),
+                active_operation: execution.active.as_ref().map(|active| {
+                    sunshine_client_protocol::ActiveOperation {
+                        operation_id: active.id.clone(),
+                        fingerprint: active.fingerprint.clone(),
+                    }
+                }),
             },
         )
         .await?;
         let mut tick = tokio::time::interval(HEARTBEAT_INTERVAL);
         tick.set_missed_tick_behavior(MissedTickBehavior::Skip);
         let mut last_peer = Instant::now();
-        let mut executing: FuturesUnordered<ExecutionFuture> = FuturesUnordered::new();
-        let mut in_flight: Option<(String, String)> = None;
+        // JoinHandle is retained by run() across sessions; dropping a socket cannot cancel effects.
+        for (operation_id, (_, report)) in &execution.completed {
+            send(
+                &mut socket,
+                ClientMessage::Result {
+                    operation_id: operation_id.clone(),
+                    report: report.clone(),
+                },
+            )
+            .await?;
+        }
+        let mut last_snapshot = None;
         crate::runtime_status::observe("manager_session", serde_json::json!("connected"));
         loop {
             tokio::select! {
@@ -196,20 +221,40 @@ impl ManagerConnection {
                     match frame {
                         Message::Text(text) => match decode_manager_message(text.as_bytes()).map_err(|_| TransportError::Protocol)? {
                             ManagerMessage::Revoked {} => return Err(TransportError::Revoked),
-                            ManagerMessage::Task { mode, task } => {
+                            ManagerMessage::ResultAccepted { operation_id, fingerprint, report_digest, finalized } => {
+                                if let Some((expected, report)) = execution.completed.get(&operation_id) {
+                                    if expected != &fingerprint || sunshine_client_protocol::report_digest(report).ok().as_deref() != Some(&report_digest) { return Err(TransportError::Protocol); }
+                                    let executor = executor.clone();
+                                    execution.acknowledging.push(tokio::spawn(async move {
+                                        let result = executor.acknowledge_final(&operation_id, &fingerprint, &report_digest, finalized).await;
+                                        (operation_id, report_digest, result)
+                                    }));
+                                }
+                            }
+                            ManagerMessage::Task { mode, task, expires_at_unix_ms, remaining_ms } => {
                                 let fingerprint = task.fingerprint().map_err(|_| TransportError::Protocol)?;
-                                if let Some((id, pending_fingerprint)) = &in_flight {
+                                if let Some(active) = &execution.active {
                                     // A retry can arrive before the first execution finishes. Keep
                                     // the original execution and its eventual result, never run twice.
-                                    if id == &task.operation_id && pending_fingerprint == &fingerprint { continue; }
+                                    if active.id == task.operation_id && active.fingerprint == fingerprint { continue; }
                                     return Err(TransportError::Protocol);
                                 }
-                                in_flight = Some((task.operation_id.clone(), fingerprint));
+                                if let Some((previous, report)) = execution.completed.get(&task.operation_id) {
+                                    if previous != &fingerprint { return Err(TransportError::Protocol); }
+                                    if mode != sunshine_client_protocol::DeliveryMode::InspectOnly || !matches!(report, Report::Unknown { .. }) {
+                                        send(&mut socket, ClientMessage::Result { operation_id: task.operation_id.clone(), report: report.clone() }).await?;
+                                        continue;
+                                    }
+                                    // An inspect request must collect fresh evidence even when the
+                                    // receipt for an earlier uncertain result is still being saved.
+                                    execution.completed.remove(&task.operation_id);
+                                }
+                                let id = task.operation_id.clone();
+                                let mutation = !matches!(task.command, sunshine_client_protocol::Command::ReadConfig {} | sunshine_client_protocol::Command::ListApplications {} | sunshine_client_protocol::Command::ListPairedClients {} | sunshine_client_protocol::Command::ReadLogs { .. } | sunshine_client_protocol::Command::ReadDiagnostics {} | sunshine_client_protocol::Command::ReadVirtualInputStatus {} | sunshine_client_protocol::Command::ReadServiceStatus {});
                                 let executor = executor.clone();
-                                executing.push(Box::pin(async move {
-                                    let report = executor.deliver(&task, mode).await;
-                                    (task.operation_id, report)
-                                }));
+                                let deadline = (mode == sunshine_client_protocol::DeliveryMode::Execute).then(|| ExecutionDeadline::received(expires_at_unix_ms, remaining_ms));
+                                let handle = tokio::spawn(async move { executor.deliver_before(&task, mode, deadline).await });
+                                execution.active = Some(ActiveExecution { id, fingerprint, mutation, handle });
                             }
                         },
                         Message::Ping(bytes) => send_frame(&mut socket, Message::Pong(bytes)).await?,
@@ -219,18 +264,44 @@ impl ManagerConnection {
                         _ => return Err(TransportError::Protocol),
                     }
                 },
-                Some((operation_id, report)) = executing.next(), if !executing.is_empty() => {
-                    in_flight = None;
-                    *mutation_completed = Some(Instant::now());
-                    send(&mut socket, ClientMessage::Result { operation_id, report }).await?;
+                result = async { (&mut execution.active.as_mut().expect("guarded execution").handle).await }, if execution.active.is_some() => {
+                    let active = execution.active.take().expect("completed execution");
+                    let report = result.map_err(|_| TransportError::Configuration)?;
+                    if active.mutation { execution.mutation_completed = Some(Instant::now()); }
+                    execution.completed.insert(active.id.clone(), (active.fingerprint, report.clone()));
+                    send(&mut socket, ClientMessage::Result { operation_id: active.id, report }).await?;
+                },
+                Some(result) = execution.acknowledging.next(), if !execution.acknowledging.is_empty() => {
+                    let (id, digest, result) = result.map_err(|_| TransportError::Configuration)?;
+                    result.map_err(|_| TransportError::Configuration)?;
+                    if execution.completed.get(&id).is_some_and(|(_, report)| sunshine_client_protocol::report_digest(report).ok().as_deref() == Some(&digest)) {
+                        execution.completed.remove(&id);
+                    }
                 },
                 _ = tick.tick() => {
                     if last_peer.elapsed() >= PEER_TIMEOUT { return Err(TransportError::Disconnected); }
+                    if execution.active.is_none() {
+                        // Fetch final receipts after a human resolution, preserving uncertain intent
+                        // until the Manager confirms that Foundation has a terminal outcome.
+                        for (id, record) in executor.pending_results().await.map_err(|_| TransportError::Configuration)? {
+                            if let Some(report) = record.report {
+                                execution.completed.entry(id.clone()).or_insert((record.fingerprint, report.clone()));
+                                send(&mut socket, ClientMessage::Result { operation_id: id, report }).await?;
+                            }
+                        }
+                    }
                     let observation = health.borrow().clone();
                     let fresh = observation.observed_at.is_some_and(|at| at.elapsed() < Duration::from_secs(30));
+                    if let Some(active) = &execution.active {
+                        send(&mut socket, ClientMessage::Progress { operation_id: active.id.clone(), fingerprint: active.fingerprint.clone() }).await?;
+                    }
+                    let configuration = if fresh && observation.observed_at.is_some_and(|at| execution.mutation_completed.is_none_or(|done| at >= done)) && execution.active.as_ref().is_none_or(|active| !active.mutation) {
+                        observation.configuration.filter(|snapshot| last_snapshot.as_ref() != Some(&snapshot.revision))
+                    } else { None };
+                    if let Some(snapshot) = &configuration { last_snapshot = Some(snapshot.revision.clone()); }
                     send(&mut socket, ClientMessage::Heartbeat {
                         sunshine_reachable: fresh.then_some(observation.sunshine_reachable),
-                        configuration: if fresh && observation.observed_at.is_some_and(|at|mutation_completed.is_none_or(|done|at>=done)) { observation.configuration } else { None },
+                        configuration,
                     }).await?;
                     send_frame(&mut socket, Message::Ping(Vec::new().into())).await?;
                 },
@@ -240,7 +311,20 @@ impl ManagerConnection {
 }
 
 type Socket = WebSocketStream<MaybeTlsStream<TcpStream>>;
-type ExecutionFuture = Pin<Box<dyn Future<Output = (String, Report)> + Send>>;
+type ReceiptCompletion = (String, String, Result<(), crate::engine::JournalError>);
+#[derive(Default)]
+struct ExecutionState {
+    active: Option<ActiveExecution>,
+    completed: BTreeMap<String, (String, Report)>,
+    mutation_completed: Option<Instant>,
+    acknowledging: FuturesUnordered<tokio::task::JoinHandle<ReceiptCompletion>>,
+}
+struct ActiveExecution {
+    id: String,
+    fingerprint: String,
+    mutation: bool,
+    handle: tokio::task::JoinHandle<Report>,
+}
 
 async fn send(socket: &mut Socket, message: ClientMessage) -> Result<(), TransportError> {
     let bytes = serde_json::to_string(&message).map_err(|_| TransportError::Protocol)?;

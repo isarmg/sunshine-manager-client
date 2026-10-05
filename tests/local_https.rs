@@ -426,6 +426,8 @@ async fn real_https_patch_preserves_original_configuration_and_filters_metadata(
         vec![
             response(config("28")),
             response(config("28")),
+            response(config("28")),
+            response(config("28")),
             response(serde_json::json!({"status": true})),
             response(config("29")),
         ],
@@ -463,8 +465,8 @@ async fn real_https_patch_preserves_original_configuration_and_filters_metadata(
         Report::ConfigSaved { .. }
     ));
     let requests = fixture.requests.lock().unwrap();
-    assert_eq!(requests.len(), 4);
-    let saved = String::from_utf8_lossy(&requests[2]);
+    assert_eq!(requests.len(), 6);
+    let saved = String::from_utf8_lossy(&requests[4]);
     assert!(saved.starts_with("POST /api/config "));
     let body: serde_json::Value =
         serde_json::from_str(saved.split_once("\r\n\r\n").unwrap().1).unwrap();
@@ -568,6 +570,8 @@ async fn authenticated_wss_delivers_result_and_revocation_stops_reconnect() {
                 serde_json::to_string(&ManagerMessage::Task {
                     mode: DeliveryMode::Execute,
                     task: Box::new(task.clone()),
+                    expires_at_unix_ms: u64::MAX / 2,
+                    remaining_ms: 900_000,
                 })
                 .unwrap()
                 .into(),
@@ -580,6 +584,8 @@ async fn authenticated_wss_delivers_result_and_revocation_stops_reconnect() {
                 serde_json::to_string(&ManagerMessage::Task {
                     mode: DeliveryMode::Execute,
                     task: Box::new(task.clone()),
+                    expires_at_unix_ms: u64::MAX / 2,
+                    remaining_ms: 900_000,
                 })
                 .unwrap()
                 .into(),
@@ -611,6 +617,7 @@ async fn authenticated_wss_delivers_result_and_revocation_stops_reconnect() {
                             assert!(configuration.is_none());
                             got_health = true;
                         }
+                        ClientMessage::Progress { .. } => {}
                         _ => panic!("unexpected hello"),
                     }
                 }
@@ -667,18 +674,64 @@ fn wss_endpoint_policy_rejects_plaintext_and_credentials_in_urls() {
     use sunshine_client::transport::validate_manager_endpoint;
     use url::Url;
     for endpoint in [
-        "ws://manager.example/sunshine-client/v2/connect",
-        "https://manager.example/sunshine-client/v2/connect",
-        "wss://token@manager.example/sunshine-client/v2/connect",
-        "wss://manager.example/sunshine-client/v2/connect?token=secret",
+        "ws://manager.example/sunshine-client/v3/connect",
+        "https://manager.example/sunshine-client/v3/connect",
+        "wss://token@manager.example/sunshine-client/v3/connect",
+        "wss://manager.example/sunshine-client/v3/connect?token=secret",
         "wss://manager.example/other",
     ] {
         assert!(validate_manager_endpoint(&Url::parse(endpoint).unwrap()).is_err());
     }
     assert!(
         validate_manager_endpoint(
-            &Url::parse("wss://manager.example/sunshine-client/v2/connect").unwrap()
+            &Url::parse("wss://manager.example/sunshine-client/v3/connect").unwrap()
         )
         .is_ok()
     );
+}
+
+#[tokio::test]
+async fn log_file_larger_than_old_response_limit_returns_latest_redacted_page() {
+    let temporary = tempfile::tempdir().unwrap();
+    certificates(temporary.path());
+    let text = format!(
+        "{}password=SECRET\nlast safe line\n",
+        "old line\n".repeat(140_000)
+    );
+    let fixture = serve(temporary.path(), vec![text_response(&text)]).await;
+    let mut sunshine = adapter(&fixture);
+    let page = sunshine.logs(None, 24 * 1024).await.unwrap();
+    assert!(page.text.ends_with("last safe line\n"));
+    assert!(page.redacted && !page.text.contains("SECRET"));
+    assert!(page.text.len() <= 24 * 1024);
+    if let Some(cursor) = &page.previous {
+        let previous = sunshine.logs(Some(cursor), 24 * 1024).await.unwrap();
+        assert_eq!(previous.revision, page.revision);
+        assert_eq!(previous.end_offset, page.start_offset);
+        assert_eq!(
+            fixture.requests.lock().unwrap().len(),
+            1,
+            "paging uses a stable snapshot during log appends"
+        );
+    }
+    validate_report(
+        &Command::ReadLogs {
+            cursor: None,
+            limit_bytes: 24 * 1024,
+        },
+        &Report::LogsRead { page },
+    )
+    .unwrap();
+}
+
+#[tokio::test]
+async fn restart_adapter_accepts_successful_empty_response() {
+    let temporary = tempfile::tempdir().unwrap();
+    certificates(temporary.path());
+    let fixture = serve(
+        temporary.path(),
+        vec!["HTTP/1.1 200 OK\r\nContent-Length: 0\r\nConnection: close\r\n\r\n".into()],
+    )
+    .await;
+    assert!(adapter(&fixture).restart().await.is_ok());
 }

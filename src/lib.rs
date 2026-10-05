@@ -12,3 +12,7 @@ pub mod transport;
 
 pub mod cli;
 pub use sarmg_client_runtime::local_status as runtime_status;
+
+mod process_identity;
+
+mod elapsed_clock;

@@ -252,7 +252,7 @@ struct PairingTarget {
 async fn resolve_pairing(config: &Bootstrap) -> Result<PairingTarget, ProvisionError> {
     let mut endpoint = Url::parse(&config.manager_endpoint).map_err(config_error)?;
     endpoint.set_scheme("https").map_err(config_error)?;
-    endpoint.set_path("/sunshine-client/v2/pairing");
+    endpoint.set_path("/sunshine-client/v3/pairing");
     let mut request = reqwest::Request::new(reqwest::Method::POST, endpoint);
     request.headers_mut().insert(
         reqwest::header::CONTENT_TYPE,
@@ -324,7 +324,7 @@ async fn provision(
     }
     let mut endpoint = Url::parse(&identity.config.manager_endpoint).map_err(config_error)?;
     endpoint.set_scheme("https").map_err(config_error)?;
-    endpoint.set_path("/sunshine-client/v2/identity");
+    endpoint.set_path("/sunshine-client/v3/identity");
     let client = system_client()?;
     let mut request = reqwest::Request::new(reqwest::Method::GET, endpoint.clone());
     let raw = Zeroizing::new(format!("Bearer {}", identity.credential.as_str()));
@@ -337,7 +337,7 @@ async fn provision(
     let binding: Binding = if response.status.is_success() {
         serde_json::from_slice(&response.body).map_err(config_error)?
     } else if response.status == reqwest::StatusCode::UNAUTHORIZED {
-        endpoint.set_path("/sunshine-client/v2/enroll");
+        endpoint.set_path("/sunshine-client/v3/enroll");
         let mut request = reqwest::Request::new(reqwest::Method::POST, endpoint);
         request.headers_mut().insert(
             reqwest::header::CONTENT_TYPE,
@@ -446,7 +446,11 @@ pub async fn run(state_path: &Path, shutdown: watch::Receiver<bool>) -> Result<(
     let executor = Arc::new(Executor::new_with_capabilities(
         identity.binding.clone(),
         capabilities.clone(),
-        identity.config.adapter()?,
+        identity
+            .config
+            .adapter()?
+            .with_backup_directory(&state_path.join("config-backups"))
+            .map_err(|_| ProvisionError::Storage(StorageError::Unsafe))?,
         journal,
     ));
     let connection =
@@ -506,7 +510,7 @@ pub async fn run(state_path: &Path, shutdown: watch::Receiver<bool>) -> Result<(
 mod bootstrap_tests {
     use super::ProvisionError;
     fn configuration() -> serde_json::Value {
-        serde_json::json!({"manager_endpoint":"wss://manager.example.org/sunshine-client/v2/connect", "enrollment_token":"a".repeat(sunshine_client_protocol::AUTHORIZATION_CODE_LENGTH),
+        serde_json::json!({"manager_endpoint":"wss://manager.example.org/sunshine-client/v3/connect", "enrollment_token":"a".repeat(sunshine_client_protocol::AUTHORIZATION_CODE_LENGTH),
             "sunshine_endpoint":"https://127.0.0.1:47990/", "sunshine_username":"fixture", "sunshine_password":"local-only"})
     }
     #[test]

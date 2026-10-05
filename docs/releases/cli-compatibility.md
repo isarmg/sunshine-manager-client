@@ -1,12 +1,12 @@
-# Sunshine Client 0.2.10 当前兼容边界
+# Sunshine Client 0.3.0 当前兼容边界
 
 Client 支持 Windows x64、Linux x64 和 macOS Apple Silicon。部署时核对安装包版本、源码身份、Manager 版本及本机 Sunshine 版本。
 
 | 维度 | 当前契约 |
 | --- | --- |
-| Client 程序 | 0.2.10 |
-| Manager | 0.11.11 |
-| Manager 协议 | sunshine-management/2；sunshine-client-protocol 0.2.0，固定提交 3501d1eebd5ad16abb52c9901cbef745a1d53afb |
+| Client 程序 | 0.3.0 |
+| Manager | 0.12.0 |
+| Manager 协议 | sunshine-management/3；sunshine-client-protocol 0.3.0，固定提交 672358672061607496487d97b998b2696aed0fa1 |
 | Sunshine | v2026.914.233613 |
 | Client Foundation | 0.9.16，固定提交 9bf6eec21f42188c73105eef2f369bf47c8b8f86 |
 | 设备账户 | 当前 v2 授权与配对状态 |

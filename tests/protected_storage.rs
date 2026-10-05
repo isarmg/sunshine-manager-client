@@ -71,6 +71,9 @@ fn windows_journal_facts_survive_reopen_and_cannot_erase_intent() {
         fingerprint: "a".repeat(64),
         effect: None,
         report: None,
+        acknowledged: false,
+        binding: None,
+        accepted_digest: None,
     };
     journal.create(id, &record).unwrap();
     record.effect = Some(EffectIntent::Restart);

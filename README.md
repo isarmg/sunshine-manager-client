@@ -1,6 +1,6 @@
 # Sunshine Client
 
-`sunshine-client` `0.2.10` 是 Sunshine Manager 的本机管理代理。它主动连接 Manager，读取和修改本机 Sunshine 配置、应用、日志与维护状态，并通过固定的平台服务适配器控制已安装的 Sunshine 服务；它不代理媒体流，也不安装 Sunshine。
+`sunshine-client` `0.3.0` 是 Sunshine Manager 的本机管理代理。它主动连接 Manager，读取和修改本机 Sunshine 配置、应用、日志与维护状态，并通过固定的平台服务适配器控制已安装的 Sunshine 服务；它不代理媒体流，也不安装 Sunshine。
 
 当前支持 Windows x64、Ubuntu 24.04 x64 和 macOS Apple Silicon，固定适配 Sunshine `v2026.914.233613`。安装包签名与实机验收边界以对应 Release 为准。
 
@@ -52,3 +52,5 @@ python3 -m unittest discover -s scripts/tests -p 'test_*.py'
 - [CLI 兼容矩阵](docs/releases/cli-compatibility.md)
 
 代码采用 [Apache License 2.0](LICENSE-APACHE)。
+
+当前设备通信使用协议 v3，需与同步更新的 Manager 配合部署。结果先持久化、收存后压缩为去重记录；WSS 中断不取消已开始的执行。详见 [Manager 通信与执行恢复](https://github.com/isarmg/sunshine-manager-server/blob/main/docs/communication-reliability.md)。

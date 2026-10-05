@@ -198,9 +198,24 @@ impl Configuration {
 
 #[async_trait]
 pub trait Sunshine: Send {
+    fn set_execution_deadline(&mut self, _deadline: Option<crate::engine::ExecutionDeadline>) {}
+    async fn save_guarded(
+        &mut self,
+        expected: &str,
+        configuration: &Configuration,
+    ) -> Result<(), AdapterError> {
+        if self.read().await?.revision() != expected {
+            return Err(AdapterError::ResourceConflict);
+        }
+        self.save(configuration).await
+    }
     async fn read(&mut self) -> Result<Configuration, AdapterError>;
     async fn save(&mut self, configuration: &Configuration) -> Result<(), AdapterError>;
     async fn restart(&mut self) -> Result<(), AdapterError>;
+    /// Actual Sunshine PID and birth identity, never the service-wrapper state.
+    async fn process_generation(&mut self) -> Option<String> {
+        None
+    }
     async fn applications(&mut self) -> Result<ApplicationsSnapshot, AdapterError> {
         Err(AdapterError::UnsupportedCapability)
     }
@@ -282,6 +297,9 @@ pub struct LocalSunshine {
     base: Url,
     authorization: header::HeaderValue,
     service: LocalServiceController,
+    backup: Option<crate::storage::ProtectedState>,
+    deadline: Option<crate::engine::ExecutionDeadline>,
+    log_snapshot: Option<(tokio::time::Instant, zeroize::Zeroizing<Vec<u8>>)>,
 }
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq, serde::Serialize, serde::Deserialize, Default)]
@@ -320,6 +338,7 @@ pub(crate) const fn platform_service_control_available() -> bool {
 
 struct LocalServiceController {
     mode: ServiceControlMode,
+    deadline: Option<crate::engine::ExecutionDeadline>,
 }
 
 const SERVICE_COMMAND_TIMEOUT: Duration = Duration::from_secs(20);
@@ -385,6 +404,23 @@ impl ServerCertVerifier for LocalCertificateVerifier {
 }
 
 impl LocalSunshine {
+    pub fn with_backup_directory(mut self, path: &std::path::Path) -> Result<Self, AdapterError> {
+        self.backup = Some(
+            crate::storage::ProtectedState::open(path)
+                .map_err(|_| AdapterError::UnsafeConfiguration)?,
+        );
+        Ok(self)
+    }
+    fn require_effect_budget(&self) -> Result<(), AdapterError> {
+        if self
+            .deadline
+            .as_ref()
+            .is_some_and(crate::engine::ExecutionDeadline::expired)
+        {
+            return Err(AdapterError::ApiUnavailable);
+        }
+        Ok(())
+    }
     pub fn new(
         endpoint: &str,
         username: &str,
@@ -437,7 +473,13 @@ impl LocalSunshine {
             client,
             base,
             authorization,
-            service: LocalServiceController { mode: service_mode },
+            service: LocalServiceController {
+                mode: service_mode,
+                deadline: None,
+            },
+            backup: None,
+            deadline: None,
+            log_snapshot: None,
         })
     }
 
@@ -447,6 +489,9 @@ impl LocalSunshine {
         path: &str,
         body: Option<Vec<u8>>,
     ) -> Result<Vec<u8>, AdapterError> {
+        if !matches!(method, Method::GET | Method::HEAD) {
+            self.require_effect_budget()?;
+        }
         let mut request = Request::new(
             method,
             self.base
@@ -725,6 +770,29 @@ impl LocalServiceController {
         }
     }
     async fn control(&self, action: ServiceAction) -> Result<ServiceState, AdapterError> {
+        let started = crate::elapsed_clock::milliseconds().ok_or(AdapterError::ApiUnavailable)?;
+        tokio::time::timeout(Duration::from_secs(45), self.control_inner(action, started))
+            .await
+            .map_err(|_| AdapterError::ApiUnavailable)?
+    }
+    fn control_budget(&self, started: u64) -> Result<(), AdapterError> {
+        let now = crate::elapsed_clock::milliseconds().ok_or(AdapterError::ApiUnavailable)?;
+        if now < started
+            || now - started >= 45_000
+            || self
+                .deadline
+                .as_ref()
+                .is_some_and(crate::engine::ExecutionDeadline::expired)
+        {
+            return Err(AdapterError::ApiUnavailable);
+        }
+        Ok(())
+    }
+    async fn control_inner(
+        &self,
+        action: ServiceAction,
+        started: u64,
+    ) -> Result<ServiceState, AdapterError> {
         if self.mode == ServiceControlMode::Disabled {
             return Err(AdapterError::UnsupportedCapability);
         }
@@ -774,6 +842,7 @@ impl LocalServiceController {
             }
             ServiceControlMode::Disabled => unreachable!(),
         };
+        self.control_budget(started)?;
         let status = service_command_output(command, SERVICE_COMMAND_TIMEOUT).await?;
         if !status.status.success() {
             return Err(AdapterError::ApiUnavailable);
@@ -793,6 +862,7 @@ impl LocalServiceController {
             }
             command = tokio::process::Command::new("sc.exe");
             command.args(["start", "SunshineService"]);
+            self.control_budget(started)?;
             if !service_command_output(command, SERVICE_COMMAND_TIMEOUT)
                 .await?
                 .status
@@ -841,6 +911,33 @@ pub fn validate_local_endpoint(url: &Url) -> Result<(), AdapterError> {
 
 #[async_trait]
 impl Sunshine for LocalSunshine {
+    fn set_execution_deadline(&mut self, deadline: Option<crate::engine::ExecutionDeadline>) {
+        self.service.deadline = deadline.clone();
+        self.deadline = deadline;
+    }
+    async fn save_guarded(
+        &mut self,
+        expected: &str,
+        configuration: &Configuration,
+    ) -> Result<(), AdapterError> {
+        let before = self.read().await?;
+        if before.revision() != expected {
+            return Err(AdapterError::ResourceConflict);
+        }
+        if let Some(backup) = &self.backup {
+            let bytes = serde_json::to_vec(&json!({"before_revision":expected,"target_revision":configuration.revision(),"configuration":before.fields}))
+                .map_err(|_|AdapterError::UnsafeConfiguration)?;
+            backup
+                .put("latest.json", &bytes)
+                .map_err(|_| AdapterError::UnsafeConfiguration)?;
+        }
+        // Do not roll back over a local editor. Sunshine has no native atomic CAS endpoint.
+        if self.read().await?.revision() != expected {
+            return Err(AdapterError::ResourceConflict);
+        }
+        self.require_effect_budget()?;
+        self.save(configuration).await
+    }
     async fn read(&mut self) -> Result<Configuration, AdapterError> {
         Configuration::from_response(self.request(Method::GET, "/api/config", None).await?)
     }
@@ -852,8 +949,35 @@ impl Sunshine for LocalSunshine {
     }
 
     async fn restart(&mut self) -> Result<(), AdapterError> {
-        self.request(Method::POST, "/api/restart", None).await?;
+        // The pinned endpoint invokes platf::restart without a JSON response contract.
+        // A connection error is ambiguous; the engine verifies a new process, never retries.
+        self.require_effect_budget()?;
+        let response = self
+            .client
+            .post(
+                self.base
+                    .join("/api/restart")
+                    .map_err(|_| AdapterError::InvalidLocalEndpoint)?,
+            )
+            .header(header::AUTHORIZATION, self.authorization.clone())
+            .send()
+            .await
+            .map_err(|_| AdapterError::ApiUnavailable)?;
+        if matches!(response.status().as_u16(), 401 | 403) {
+            return Err(AdapterError::CredentialsRejected);
+        }
+        if !response.status().is_success() {
+            return Err(AdapterError::ApiUnavailable);
+        }
         Ok(())
+    }
+
+    async fn process_generation(&mut self) -> Option<String> {
+        let port = self.base.port_or_known_default()?;
+        tokio::task::spawn_blocking(move || crate::process_identity::sunshine_generation(port))
+            .await
+            .ok()
+            .flatten()
     }
 
     async fn applications(&mut self) -> Result<ApplicationsSnapshot, AdapterError> {
@@ -1017,11 +1141,83 @@ impl Sunshine for LocalSunshine {
         cursor: Option<&LogCursor>,
         limit: u32,
     ) -> Result<LogPage, AdapterError> {
-        log_page(
-            &self.request_bytes(Method::GET, "/api/logs", None).await?,
-            cursor,
-            limit,
-        )
+        if let Some(cursor) = cursor {
+            let (created, bytes) = self
+                .log_snapshot
+                .as_ref()
+                .filter(|(created, _)| created.elapsed() < Duration::from_secs(120))
+                .ok_or(AdapterError::ResourceConflict)?;
+            let _ = created;
+            return log_page(bytes, Some(cursor), limit);
+        }
+        // Upstream serves a whole file. Stream it with bounded memory, bytes and elapsed time.
+        // Paging covers the retained tail window; an oversized upstream stream fails explicitly.
+        const WINDOW: usize = 1024 * 1024;
+        const MAX_STREAM: usize = 64 * 1024 * 1024;
+        let mut response = self
+            .client
+            .get(
+                self.base
+                    .join("/api/logs")
+                    .map_err(|_| AdapterError::InvalidLocalEndpoint)?,
+            )
+            .header(header::AUTHORIZATION, self.authorization.clone())
+            .send()
+            .await
+            .map_err(|_| AdapterError::ApiUnavailable)?;
+        let headers = response
+            .headers()
+            .iter()
+            .map(|(name, value)| name.as_str().len() + value.as_bytes().len() + 4)
+            .sum::<usize>();
+        if headers > 16 * 1024 {
+            return Err(AdapterError::ApiUnavailable);
+        }
+        if matches!(response.status().as_u16(), 401 | 403) {
+            return Err(AdapterError::CredentialsRejected);
+        }
+        if !response.status().is_success()
+            || response
+                .content_length()
+                .is_some_and(|n| n > MAX_STREAM as u64)
+        {
+            return Err(AdapterError::ApiUnavailable);
+        }
+        let mut tail = Vec::with_capacity(WINDOW);
+        let mut total = 0usize;
+        while let Some(chunk) = response
+            .chunk()
+            .await
+            .map_err(|_| AdapterError::ApiUnavailable)?
+        {
+            total = total
+                .checked_add(chunk.len())
+                .ok_or(AdapterError::ApiUnavailable)?;
+            if total > MAX_STREAM {
+                return Err(AdapterError::ApiUnavailable);
+            }
+            if chunk.len() >= WINDOW {
+                tail.clear();
+                tail.extend_from_slice(&chunk[chunk.len() - WINDOW..]);
+            } else {
+                let excess = (tail.len() + chunk.len()).saturating_sub(WINDOW);
+                if excess > 0 {
+                    tail.drain(..excess);
+                }
+                tail.extend_from_slice(&chunk);
+            }
+        }
+        if total > tail.len() {
+            // Discard the partial first line, including any incomplete UTF-8 or secret prefix.
+            let line = tail
+                .iter()
+                .position(|byte| *byte == b'\n')
+                .map_or(tail.len(), |at| at + 1);
+            tail.drain(..line);
+        }
+        let page = log_page(&tail, cursor, limit)?;
+        self.log_snapshot = Some((tokio::time::Instant::now(), zeroize::Zeroizing::new(tail)));
+        Ok(page)
     }
 
     async fn virtual_input_status(&mut self) -> Result<VirtualInputStatus, AdapterError> {
@@ -1083,6 +1279,7 @@ impl Sunshine for LocalSunshine {
         &mut self,
         action: ServiceAction,
     ) -> Result<ServiceState, AdapterError> {
+        self.require_effect_budget()?;
         self.service.control(action).await
     }
 }

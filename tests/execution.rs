@@ -28,6 +28,7 @@ struct Fixture {
     lose_write_receipt: bool,
     lose_restart_receipt: bool,
     fail_read: bool,
+    unchanged_restart: bool,
     conflict_on_second_read: bool,
 }
 
@@ -41,6 +42,7 @@ impl Default for Fixture {
             lose_write_receipt: false,
             lose_restart_receipt: false,
             fail_read: false,
+            unchanged_restart: false,
             conflict_on_second_read: false,
         }
     }
@@ -71,6 +73,26 @@ impl Sunshine for FakeSunshine {
         } else {
             Ok(())
         }
+    }
+    async fn process_generation(&mut self) -> Option<String> {
+        let fixture = self.0.lock().unwrap();
+        Some(format!(
+            "generation-{}",
+            if fixture.unchanged_restart {
+                0
+            } else {
+                fixture.restarts
+            }
+        ))
+    }
+    async fn service_status(&mut self) -> Result<ServiceState, AdapterError> {
+        Ok(ServiceState::Running)
+    }
+    async fn control_service(
+        &mut self,
+        _action: ServiceAction,
+    ) -> Result<ServiceState, AdapterError> {
+        Err(AdapterError::ApiUnavailable)
     }
     async fn restart(&mut self) -> Result<(), AdapterError> {
         let mut fixture = self.0.lock().unwrap();
@@ -221,6 +243,9 @@ async fn an_uncertain_save_is_not_retried_even_when_old_configuration_is_still_p
                 target_revision: configuration("29").revision(),
             }),
             report: None,
+            acknowledged: false,
+            binding: None,
+            accepted_digest: None,
         },
     );
     let executor = Executor::new(binding(), sunshine.clone(), journal);
@@ -334,19 +359,13 @@ async fn lost_restart_receipt_never_triggers_another_restart() {
     let journal = MemoryJournal::default();
     let task = restart();
     let executor = Executor::new(binding(), sunshine.clone(), journal.clone());
-    assert_eq!(
-        executor.deliver(&task, DeliveryMode::Execute).await,
-        Report::Unknown {
-            reason: Uncertainty::RestartNotConfirmed
-        }
-    );
+    let report = executor.deliver(&task, DeliveryMode::Execute).await;
+    assert!(matches!(report, Report::RestartAcknowledged { .. }));
     drop(executor);
     let recovered = Executor::new(binding(), sunshine.clone(), journal);
     assert_eq!(
         recovered.deliver(&task, DeliveryMode::Execute).await,
-        Report::Unknown {
-            reason: Uncertainty::RestartNotConfirmed
-        }
+        report
     );
     assert_eq!(sunshine.0.lock().unwrap().restarts, 1);
 }
@@ -354,7 +373,7 @@ async fn lost_restart_receipt_never_triggers_another_restart() {
 #[tokio::test]
 async fn restart_receipt_and_reachability_are_not_runtime_effectiveness() {
     let executor = Executor::new(binding(), FakeSunshine::default(), MemoryJournal::default());
-    let Report::RestartAcknowledged { snapshot } =
+    let Report::RestartAcknowledged { snapshot, .. } =
         executor.deliver(&restart(), DeliveryMode::Execute).await
     else {
         panic!("expected acknowledgement")
@@ -453,4 +472,182 @@ fn endpoint_policy_rejects_remote_hosts_plaintext_credentials_and_paths() {
     for url in ["https://127.0.0.1:47990", "https://[::1]:47990"] {
         assert!(validate_local_endpoint(&Url::parse(url).unwrap()).is_ok());
     }
+}
+
+#[tokio::test]
+async fn failed_service_restart_with_old_running_process_is_unknown() {
+    let sunshine = FakeSunshine::default();
+    let mut capabilities = Capabilities {
+        protocol: PROTOCOL.into(),
+        client_version: "test".into(),
+        os: ClientOs::LinuxX86_64,
+        sunshine_version: SUNSHINE_VERSION.into(),
+        restart_allowed: true,
+        managed_fields: config::FIELD_DEFINITIONS
+            .iter()
+            .map(|f| f.key.to_owned())
+            .collect(),
+        application_management: true,
+        application_host_commands_allowed: true,
+        moonlight_pairing_management: true,
+        diagnostics: true,
+        maintenance: true,
+        service_control: true,
+    };
+    capabilities.service_control = true;
+    let executor = Executor::new_with_capabilities(
+        binding(),
+        capabilities,
+        sunshine,
+        MemoryJournal::default(),
+    );
+    let mut task = restart();
+    task.permission = Permission::ControlService;
+    task.command = Command::ControlService {
+        action: ServiceAction::Restart,
+        administrator_confirmed: true,
+    };
+    assert_eq!(
+        executor.deliver(&task, DeliveryMode::Execute).await,
+        Report::Unknown {
+            reason: Uncertainty::ServiceTransitionNotConfirmed
+        }
+    );
+    assert_eq!(
+        executor.deliver(&task, DeliveryMode::InspectOnly).await,
+        Report::Unknown {
+            reason: Uncertainty::ServiceTransitionNotConfirmed
+        }
+    );
+}
+
+#[tokio::test]
+async fn expired_delivery_never_writes_but_inspection_ignores_expiry() {
+    let sunshine = FakeSunshine::default();
+    let executor = Executor::new(binding(), sunshine.clone(), MemoryJournal::default());
+    let task = patch();
+    let deadline = ExecutionDeadline::received(0, 0);
+    assert_eq!(
+        executor
+            .deliver_before(&task, DeliveryMode::Execute, Some(deadline))
+            .await,
+        Report::Rejected {
+            reason: Rejection::ExecutionExpired
+        }
+    );
+    assert_eq!(sunshine.0.lock().unwrap().saves, 0);
+    let task = patch();
+    let saved = executor.deliver(&task, DeliveryMode::Execute).await;
+    assert_eq!(
+        executor
+            .deliver_before(
+                &task,
+                DeliveryMode::InspectOnly,
+                Some(ExecutionDeadline::received(0, 0))
+            )
+            .await,
+        saved
+    );
+}
+
+#[tokio::test]
+async fn acknowledgment_checks_digest_and_compacts_without_allowing_reexecution() {
+    let sunshine = FakeSunshine::default();
+    let journal = MemoryJournal::default();
+    let executor = Executor::new(binding(), sunshine.clone(), journal.clone());
+    let task = patch();
+    let report = executor.deliver(&task, DeliveryMode::Execute).await;
+    assert!(
+        executor
+            .acknowledge(
+                &task.operation_id,
+                &task.fingerprint().unwrap(),
+                &"0".repeat(64)
+            )
+            .await
+            .is_err()
+    );
+    executor
+        .acknowledge(
+            &task.operation_id,
+            &task.fingerprint().unwrap(),
+            &report_digest(&report).unwrap(),
+        )
+        .await
+        .unwrap();
+    let compact = journal.0.lock().unwrap().values[&task.operation_id].clone();
+    assert!(compact.acknowledged && compact.report.is_none() && compact.effect.is_none());
+    assert_eq!(
+        executor.deliver(&task, DeliveryMode::Execute).await,
+        Report::Rejected {
+            reason: Rejection::OperationAlreadyCompleted
+        }
+    );
+    assert_eq!(sunshine.0.lock().unwrap().saves, 1);
+}
+
+#[tokio::test]
+async fn diagnostics_remain_available_when_journal_has_no_free_slots() {
+    let sunshine = FakeSunshine::default();
+    let journal = MemoryJournal::default();
+    journal.0.lock().unwrap().full = true;
+    let executor = Executor::new(binding(), sunshine.clone(), journal);
+    let mut task = patch();
+    task.command = Command::ReadConfig {};
+    task.permission = Permission::ReadConfig;
+    assert!(matches!(
+        executor.deliver(&task, DeliveryMode::Execute).await,
+        Report::ConfigRead { .. }
+    ));
+    assert_eq!(sunshine.0.lock().unwrap().saves, 0);
+}
+
+#[tokio::test]
+async fn uncertain_intent_is_retained_until_a_final_manager_resolution() {
+    let task = restart();
+    let journal = MemoryJournal::default();
+    let report = Report::Unknown {
+        reason: Uncertainty::RestartNotConfirmed,
+    };
+    journal.0.lock().unwrap().values.insert(
+        task.operation_id.clone(),
+        ExecutionRecord {
+            fingerprint: task.fingerprint().unwrap(),
+            effect: Some(EffectIntent::Restart),
+            report: Some(report.clone()),
+            acknowledged: false,
+            binding: Some(binding()),
+            accepted_digest: None,
+        },
+    );
+    let executor = Executor::new(binding(), FakeSunshine::default(), journal.clone());
+    executor
+        .acknowledge(
+            &task.operation_id,
+            &task.fingerprint().unwrap(),
+            &report_digest(&report).unwrap(),
+        )
+        .await
+        .unwrap();
+    assert!(
+        journal.0.lock().unwrap().values[&task.operation_id]
+            .effect
+            .is_some()
+    );
+    executor
+        .acknowledge_final(
+            &task.operation_id,
+            &task.fingerprint().unwrap(),
+            &report_digest(&report).unwrap(),
+            true,
+        )
+        .await
+        .unwrap();
+    assert!(journal.0.lock().unwrap().values[&task.operation_id].acknowledged);
+    assert_eq!(
+        executor.deliver(&task, DeliveryMode::Execute).await,
+        Report::Rejected {
+            reason: Rejection::OperationAlreadyCompleted
+        }
+    );
 }

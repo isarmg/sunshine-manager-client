@@ -9,13 +9,17 @@ use std::{collections::BTreeSet, path::Path};
 use sunshine_client_protocol::validate_revision;
 
 const MAX_RECORDS: usize = 4096;
-const MAX_RECORD_BYTES: usize = 16 * 1024;
+const MAX_RECORD_BYTES: usize = crate::engine::MAX_RECORD_BYTES;
+// Acknowledged IDs remain durable tombstones; 4096 limits only unacknowledged work.
+const MAX_IDENTITIES: usize = 1_000_000;
+const MAX_TOTAL_BYTES: u64 = (MAX_RECORDS * MAX_RECORD_BYTES + MAX_IDENTITIES * 512) as u64;
 const LOCK_NAME: &str = "execution.lock";
 
 pub struct FileJournal {
     directory: PrivateDirectory,
     _lock: AdvisoryLock,
     ids: BTreeSet<String>,
+    active: BTreeSet<String>,
     /// A failed fsync can have installed the new name. Do not trust cached inventory afterward.
     poisoned: bool,
 }
@@ -27,11 +31,12 @@ impl FileJournal {
         let lock = AdvisoryLock::acquire(&directory, &lock_name.as_relative()).map_err(storage)?;
         let files = directory
             .files(InventoryLimits {
-                max_entries: MAX_RECORDS + 64,
-                max_total_bytes: (MAX_RECORDS * MAX_RECORD_BYTES) as u64,
+                max_entries: MAX_IDENTITIES + 64,
+                max_total_bytes: MAX_TOTAL_BYTES,
             })
             .map_err(storage)?;
         let mut ids = BTreeSet::new();
+        let mut active = BTreeSet::new();
         for file in files {
             let name = file
                 .name
@@ -48,15 +53,19 @@ impl FileJournal {
                 .map_err(storage)?;
             let record: ExecutionRecord = serde_json::from_slice(&bytes).map_err(storage)?;
             validate_record(&record)?;
+            if !record.acknowledged {
+                active.insert(id.to_owned());
+            }
             ids.insert(id.to_owned());
         }
-        if ids.len() > MAX_RECORDS {
+        if active.len() > MAX_RECORDS || ids.len() > MAX_IDENTITIES {
             return Err(JournalError::Full);
         }
         Ok(Self {
             directory,
             _lock: lock,
             ids,
+            active,
             poisoned: false,
         })
     }
@@ -84,7 +93,7 @@ impl Journal for FileJournal {
         if self.poisoned || self.ids.contains(id) {
             return Err(JournalError::Storage);
         }
-        if self.ids.len() >= MAX_RECORDS {
+        if self.active.len() >= MAX_RECORDS || self.ids.len() >= MAX_IDENTITIES {
             return Err(JournalError::Full);
         }
         let name = record_name(id)?;
@@ -94,6 +103,13 @@ impl Journal for FileJournal {
             return Err(JournalError::Storage);
         }
         self.ids.insert(id.to_owned());
+        if !record.acknowledged {
+            self.active.insert(id.to_owned());
+        }
+        crate::runtime_status::observe(
+            "journal_unacknowledged",
+            serde_json::json!(self.active.len()),
+        );
         Ok(())
     }
 
@@ -104,11 +120,16 @@ impl Journal for FileJournal {
         let existing = self.load(id)?.ok_or(JournalError::Storage)?;
         // Never erase an intent, change an operation fingerprint or rewrite a final observation.
         if existing.fingerprint != record.fingerprint
-            || (existing.effect.is_some() && existing.effect != record.effect)
-            || existing.report.as_ref().is_some_and(|report| {
-                !matches!(report, sunshine_client_protocol::Report::Unknown { .. })
-                    && Some(report) != record.report.as_ref()
-            })
+            || existing.binding != record.binding
+            || (existing.acknowledged && !record.acknowledged)
+            || (existing.effect.is_some()
+                && existing.effect != record.effect
+                && !record.acknowledged)
+            || (!record.acknowledged
+                && existing.report.as_ref().is_some_and(|report| {
+                    !matches!(report, sunshine_client_protocol::Report::Unknown { .. })
+                        && Some(report) != record.report.as_ref()
+                }))
         {
             return Err(JournalError::Storage);
         }
@@ -117,7 +138,30 @@ impl Journal for FileJournal {
             self.poisoned = true;
             return Err(JournalError::Storage);
         }
+        if record.acknowledged {
+            self.active.remove(id);
+        }
         Ok(())
+    }
+
+    fn pending_results(&mut self) -> Result<Vec<(String, ExecutionRecord)>, JournalError> {
+        let mut results = Vec::new();
+        for id in self.active.clone() {
+            if let Some(record) = self.load(&id)?
+                && record.report.as_ref().is_some_and(|report| {
+                    if matches!(report, sunshine_client_protocol::Report::Unknown { .. }) {
+                        return true;
+                    }
+                    sunshine_client_protocol::report_digest(report)
+                        .ok()
+                        .as_ref()
+                        != record.accepted_digest.as_ref()
+                })
+            {
+                results.push((id, record));
+            }
+        }
+        Ok(results)
     }
 }
 
@@ -140,7 +184,19 @@ fn record_name(id: &str) -> Result<EntryName, JournalError> {
 
 fn validate_record(record: &ExecutionRecord) -> Result<(), JournalError> {
     validate_revision(&record.fingerprint).map_err(storage)?;
-    if let Some(crate::engine::EffectIntent::Save { target_revision }) = &record.effect {
+    if record.acknowledged && (record.effect.is_some() || record.report.is_some()) {
+        return Err(JournalError::Storage);
+    }
+    if let Some(digest) = &record.accepted_digest {
+        validate_revision(digest).map_err(storage)?;
+    }
+    if let Some(
+        crate::engine::EffectIntent::Save { target_revision }
+        | crate::engine::EffectIntent::RestartObserved {
+            target_revision, ..
+        },
+    ) = &record.effect
+    {
         validate_revision(target_revision).map_err(storage)?;
     }
     Ok(())
@@ -175,8 +231,8 @@ pub fn inspect(path: &Path, operation: Option<&str>) -> Result<serde_json::Value
     let mut records = Vec::new();
     for file in directory
         .files(InventoryLimits {
-            max_entries: MAX_RECORDS + 64,
-            max_total_bytes: (MAX_RECORDS * MAX_RECORD_BYTES) as u64,
+            max_entries: MAX_IDENTITIES + 64,
+            max_total_bytes: MAX_TOTAL_BYTES,
         })
         .map_err(storage)?
     {
