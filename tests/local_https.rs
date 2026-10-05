@@ -45,6 +45,7 @@ fn certificates(path: &Path) {
         "[req]\nprompt = no\ndistinguished_name = fixture_subject\n\
          [fixture_subject]\nCN = localhost\n\
          [fixture_ca]\nbasicConstraints = critical,CA:TRUE\n\
+         [fixture_sunshine]\nbasicConstraints = critical,CA:FALSE\n\
          [fixture_server]\nsubjectAltName = IP:127.0.0.1\n\
          basicConstraints = critical,CA:FALSE\nextendedKeyUsage = serverAuth\n",
     )
@@ -73,6 +74,7 @@ fn certificates(path: &Path) {
         ],
     );
     // Mirrors Sunshine's built-in certificate: self-signed CN, without a loopback SAN.
+    // An explicit leaf extension forces v3 even when the host adds no default extensions.
     openssl(
         path,
         &[
@@ -92,6 +94,8 @@ fn certificates(path: &Path) {
             "/CN=Sunshine Gamestream Host",
             "-config",
             "openssl-fixture.cnf",
+            "-extensions",
+            "fixture_sunshine",
         ],
     );
     openssl(
@@ -558,7 +562,12 @@ fn credentials_are_not_formatted_in_adapter_errors() {
 #[tokio::test]
 #[ignore = "requires loopback sockets and openssl"]
 async fn real_https_overwrite_preserves_local_fields_and_backs_up_current_configuration() {
-    let temporary = tempfile::tempdir_in(std::env::temp_dir().canonicalize().unwrap()).unwrap();
+    let temporary_root = std::env::temp_dir();
+    // Unix temporary roots can be symlinks. Windows canonicalize would produce a
+    // verbatim path instead of the ordinary DOS path required by protected storage.
+    #[cfg(unix)]
+    let temporary_root = temporary_root.canonicalize().unwrap();
+    let temporary = tempfile::tempdir_in(temporary_root).unwrap();
     certificates(temporary.path());
     let mut before = config("40");
     before["min_threads"] = serde_json::json!("4");
