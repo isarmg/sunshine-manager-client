@@ -1,0 +1,250 @@
+name: Client packages
+
+on:
+  push:
+    branches: [main, 'codex/client-cli-*']
+    tags: ['v*']
+  pull_request:
+  workflow_dispatch:
+
+permissions: {}
+
+concurrency:
+  group: client-packages-${{ github.workflow }}-${{ github.ref }}
+  cancel-in-progress: true
+
+jobs:
+  client-linux-package:
+    permissions:
+      contents: read
+    runs-on: ubuntu-24.04
+    timeout-minutes: 30
+    steps:
+      - name: Check out exact source without credentials
+        uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7
+        with:
+          fetch-depth: 0
+          persist-credentials: false
+      - name: Enforce workflow policy
+        run: python3 scripts/check-workflow-supply-chain.py
+      - name: Install exact Rust
+        run: rustup toolchain install 1.99.0 --profile minimal --component clippy,rustfmt
+      - name: Test Client and secure local transport
+        run: |
+          cargo fmt --all -- --check
+          cargo clippy --locked -p xscc --all-targets -- -D warnings
+          cargo test --locked -p xscc
+          cargo build --locked --example native_acceptance_seed
+          cargo test --locked -p xscc --test cli_contract -- --ignored
+          cargo test --locked -p xscc --test local_https -- --ignored --skip authenticated_wss_delivers_result_and_revocation_stops_reconnect
+          python3 -m unittest discover -s scripts/tests -p 'test_*.py'
+      - name: Build only the Linux Client
+        run: |
+          tag_args=()
+          if [[ "$GITHUB_REF_TYPE" == tag ]]; then tag_args+=(--require-tag); fi
+          python3 scripts/package-client.py --output "$RUNNER_TEMP/client-output" "${tag_args[@]}"
+      - name: Prepare protected installation root on the disposable hosted runner
+        run: |
+          test "$GITHUB_ACTIONS" = true
+          test "$RUNNER_ENVIRONMENT" = github-hosted
+          # Hosted images make tool directories writable. Production repair
+          # refuses writable ancestors; normalize these disposable fixtures only.
+          sudo chmod go-w /opt /usr/local /usr/local/bin
+      - name: Verify extracted package and actual systemd install lifecycle
+        run: |
+          mapfile -t archives < <(find "$RUNNER_TEMP/client-output" -maxdepth 1 -type f -name '*.tar.gz')
+          test "${#archives[@]}" = 1
+          mapfile -t installers < <(find "$RUNNER_TEMP/client-output" -maxdepth 1 -type f -name '*.deb')
+          test "${#installers[@]}" = 1
+          sudo env GITHUB_ACTIONS=true RUNNER_ENVIRONMENT="$RUNNER_ENVIRONMENT" python3 scripts/check-client-package.py --archive "${archives[0]}" --sha "$GITHUB_SHA" --install --installer "${installers[0]}" --seed "$PWD/target/debug/examples/native_acceptance_seed"
+      - name: Retain verified Linux Client release inputs
+        uses: actions/upload-artifact@043fb46d1a93c77aae656e7c1c64a875d1fc6a0a # v7.0.1
+        with:
+          name: xscc-linux
+          path: ${{ runner.temp }}/client-output/*
+          if-no-files-found: error
+  client-windows-package:
+    permissions:
+      contents: read
+    runs-on: windows-2025
+    timeout-minutes: 30
+    env:
+      VSLANG: 1033
+    steps:
+      - name: Check out exact source without credentials
+        uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7
+        with:
+          fetch-depth: 0
+          persist-credentials: false
+      - name: Enforce workflow policy
+        run: python scripts/check-workflow-supply-chain.py
+      - name: Check native PowerShell module environment before building
+        run: python -m unittest discover -s scripts/tests -p 'test_client_package.py'
+      - name: Install exact Rust
+        run: rustup toolchain install 1.99.0 --profile minimal --component clippy,rustfmt
+      - name: Test Client and secure local transport
+        shell: pwsh
+        run: |
+          $env:PATH = 'C:\Program Files\Git\usr\bin;' + $env:PATH
+          cargo clippy --locked -p xscc --all-targets -- -D warnings
+          if ($LASTEXITCODE) { exit $LASTEXITCODE }
+          cargo test --locked -p xscc
+          if ($LASTEXITCODE) { exit $LASTEXITCODE }
+          cargo build --locked --example native_acceptance_seed
+          if ($LASTEXITCODE) { exit $LASTEXITCODE }
+          cargo test --locked -p xscc --test local_https -- --ignored --skip authenticated_wss_delivers_result_and_revocation_stops_reconnect
+          if ($LASTEXITCODE) { exit $LASTEXITCODE }
+          python -m unittest discover -s scripts/tests -p 'test_*.py'
+          exit $LASTEXITCODE
+      - name: Build only the Windows Client
+        shell: pwsh
+        run: |
+          $tagArgs = @()
+          if ($env:GITHUB_REF_TYPE -eq 'tag') { $tagArgs += '--require-tag' }
+          python scripts/package-client.py --output "$env:RUNNER_TEMP\client-output" @tagArgs
+          exit $LASTEXITCODE
+      - name: Verify MSI custom path, mandatory features and state preservation
+        shell: pwsh
+        run: |
+          $installers = @(Get-ChildItem -LiteralPath "$env:RUNNER_TEMP\client-output" -Filter '*.msi' -File)
+          if ($installers.Count -ne 1) { throw 'Expected one Windows MSI' }
+          $customRoot = Join-Path $env:RUNNER_TEMP 'XsccCustom'
+          $stateRoot = Join-Path $env:ProgramData 'Xscc'
+          & "$PWD\target\debug\examples\native_acceptance_seed.exe" $stateRoot
+          if ($LASTEXITCODE) { throw 'Protected state fixture could not be created.' }
+          $configuration = Join-Path $stateRoot 'provisioning\state.sqlite3'
+          $executionData = Join-Path $stateRoot 'journal\state.sqlite3'
+          $configurationHash = (Get-FileHash -LiteralPath $configuration).Hash
+          $executionDataHash = (Get-FileHash -LiteralPath $executionData).Hash
+          $install = Start-Process msiexec.exe -ArgumentList "/i `"$($installers[0].FullName)`" INSTALLFOLDER=`"$customRoot`" /qn /norestart" -Wait -PassThru
+          if ($install.ExitCode -notin @(0, 3010)) { throw "Custom-path MSI install failed with $($install.ExitCode)." }
+          & (Join-Path $customRoot 'xscc.exe') --version
+          if ($LASTEXITCODE) { throw 'Custom-path executable verification failed.' }
+          if ((Get-FileHash -LiteralPath $configuration).Hash -ne $configurationHash -or (Get-FileHash -LiteralPath $executionData).Hash -ne $executionDataHash) {
+            throw 'Default MSI installation changed existing configuration or execution data.'
+          }
+          if ((Get-Service Xscc).StartType -ne 'Automatic') {
+            throw 'Fresh MSI installation did not register an Automatic Windows service.'
+          }
+          $uninstall = Start-Process msiexec.exe -ArgumentList "/x `"$($installers[0].FullName)`" /qn /norestart" -Wait -PassThru
+          if ($uninstall.ExitCode -notin @(0, 3010)) { throw "Custom-path MSI uninstall failed with $($uninstall.ExitCode)." }
+          if ((Test-Path $customRoot) -or (Get-Service Xscc -ErrorAction SilentlyContinue)) {
+            throw 'Custom-path MSI uninstall left program files or service registration.'
+          }
+          if (Test-Path $stateRoot) { Remove-Item -LiteralPath $stateRoot -Recurse -Force }
+          Write-Host 'Sunshine MSI custom path, state preservation and Automatic service defaults passed.'
+      - name: Verify extracted package and actual Windows Service install lifecycle
+        shell: pwsh
+        run: |
+          $env:PATH = 'C:\Program Files\Git\usr\bin;' + $env:PATH
+          $archives = @(Get-ChildItem -LiteralPath "$env:RUNNER_TEMP\client-output" -Filter '*.zip' -File)
+          if ($archives.Count -ne 1) { throw 'Expected one Windows archive' }
+          $installers = @(Get-ChildItem -LiteralPath "$env:RUNNER_TEMP\client-output" -Filter '*.msi' -File)
+          if ($installers.Count -ne 1) { throw 'Expected one Windows MSI' }
+          python scripts/check-client-package.py --archive $archives[0].FullName --sha "$env:GITHUB_SHA" --install --installer $installers[0].FullName --seed "$PWD\target\debug\examples\native_acceptance_seed.exe"
+          exit $LASTEXITCODE
+      - name: Retain verified Windows Client release inputs
+        uses: actions/upload-artifact@043fb46d1a93c77aae656e7c1c64a875d1fc6a0a # v7.0.1
+        with:
+          name: xscc-windows
+          path: ${{ runner.temp }}/client-output/*
+          if-no-files-found: error
+
+  client-macos-arm64:
+    permissions:
+      contents: read
+    runs-on: macos-15
+    timeout-minutes: 30
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7
+        with:
+          persist-credentials: false
+      - name: Install exact Rust
+        run: rustup toolchain install 1.99.0 --profile minimal --component clippy,rustfmt
+      - name: Native protected storage, journal recovery and CLI tests
+        run: |
+          cargo test --locked
+          cargo test --locked --test cli_contract -- --ignored
+          cargo clippy --locked --all-targets -- -D warnings
+          plutil -lint deploy/macos/org.sarmg.xscc.plist
+          sh -n packaging/macos/build-pkg.sh
+          sh -n packaging/macos/scripts/preinstall
+          sh -n packaging/macos/scripts/postinstall
+          sh -n deploy/macos/install-macos.sh
+          sh -n deploy/macos/uninstall-macos.sh
+      - name: Build native CLI and disposable acceptance fixture
+        run: |
+          cargo build --locked --release
+          cargo build --locked --example native_acceptance_seed
+      - name: Exercise actual launchd, service account, readonly IPC and state-preserving uninstall
+        run: |
+          bash scripts/prepare-native-macos-fixture.sh "$PWD/target/release/xscc"
+          sudo sh deploy/macos/install-macos.sh "$PWD/target/release/xscc"
+          sudo env GITHUB_ACTIONS=true RUNNER_ENVIRONMENT="$RUNNER_ENVIRONMENT" python3 scripts/native-service-acceptance.py --binary /usr/local/libexec/xscc --seed "$PWD/target/debug/examples/native_acceptance_seed" --state "/Library/Application Support/xscc" --service-user _sunshineclient:_sunshineclient
+          sudo sh deploy/macos/uninstall-macos.sh
+          sudo test -f "/Library/Application Support/xscc/provisioning/identity.json"
+          sudo test -d "/Library/Application Support/xscc/journal"
+          sudo cp "/Library/Application Support/xscc/provisioning/identity.json" "$RUNNER_TEMP/identity-before-reinstall.json"
+          sudo sh deploy/macos/install-macos.sh "$PWD/target/release/xscc"
+          sudo cmp "$RUNNER_TEMP/identity-before-reinstall.json" "/Library/Application Support/xscc/provisioning/identity.json"
+          sudo sh deploy/macos/install-macos.sh "$PWD/target/release/xscc"
+          sudo sh deploy/macos/uninstall-macos.sh
+      - name: Package and independently verify the native Mac archive and PKG
+        run: |
+          python3 scripts/package-client.py --output "$RUNNER_TEMP/client-output"
+          archives=("$RUNNER_TEMP"/client-output/*.tar.gz)
+          test "${#archives[@]}" = 1
+          packages=("$RUNNER_TEMP"/client-output/*.pkg)
+          test "${#packages[@]}" = 1
+          if ! sudo installer -verboseR -pkg "${packages[0]}" -target /; then
+            sudo tail -n 200 /var/log/install.log || true
+            sudo log show --last 5m --style compact --predicate 'process == "installer"' || true
+            exit 1
+          fi
+          sudo test -x /usr/local/libexec/xscc
+          if sudo launchctl print system/org.sarmg.xscc >/dev/null 2>&1; then exit 1; fi
+          sudo sh deploy/macos/uninstall-macos.sh
+          python3 scripts/check-client-package.py --archive "${archives[0]}" --sha "$GITHUB_SHA"
+      - name: Retain verified native Mac archive
+        uses: actions/upload-artifact@043fb46d1a93c77aae656e7c1c64a875d1fc6a0a # v7.0.1
+        with:
+          name: xscc-macos-arm64
+          path: ${{ runner.temp }}/client-output/*
+          if-no-files-found: error
+
+  publish:
+    if: ${{ github.ref_type == 'tag' }}
+    needs: [client-linux-package, client-windows-package, client-macos-arm64]
+    permissions:
+      contents: write
+    runs-on: ubuntu-24.04
+    timeout-minutes: 10
+    steps:
+      - name: Check out the exact tagged source
+        uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          fetch-depth: 0
+          persist-credentials: false
+      - name: Download verified native packages
+        uses: actions/download-artifact@3e5f45b2cfb9172054b4087a40e8e0b5a5461e7c # v8.0.1
+        with:
+          pattern: xscc-*
+          path: dist
+          merge-multiple: true
+      - name: Publish the immutable GitHub Release
+        env:
+          GH_TOKEN: ${{ github.token }}
+        shell: bash
+        run: |
+          version="${GITHUB_REF_NAME#v}"
+          notes="docs/releases/${version}.md"
+          test -f "$notes"
+          if gh release view "$GITHUB_REF_NAME" >/dev/null 2>&1; then
+            echo "Refusing to reuse or overwrite existing release $GITHUB_REF_NAME" >&2
+            exit 1
+          fi
+          (cd dist && sha256sum -- * > SHA256SUMS)
+          gh release create "$GITHUB_REF_NAME" dist/* \
+            --verify-tag \
+            --notes-file "$notes" \
+            --title "xscc $GITHUB_REF_NAME"

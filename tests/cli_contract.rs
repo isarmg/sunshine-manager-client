@@ -1,0 +1,232 @@
+#![cfg(unix)]
+use serde_json::{Value, json};
+use std::{
+    fs,
+    io::Write,
+    os::unix::fs::PermissionsExt,
+    path::Path,
+    process::{Command, Stdio},
+};
+use xscc::storage::{MaintenanceGuard, ProtectedState};
+fn call(path: &Path, args: &[&str], input: Option<&str>) -> (i32, Value) {
+    let mut child = Command::new(env!("CARGO_BIN_EXE_xscc"))
+        .args(args)
+        .arg("--state")
+        .arg(path)
+        .args(["--format", "json", "--non-interactive"])
+        .stdin(Stdio::piped())
+        .stdout(Stdio::piped())
+        .stderr(Stdio::piped())
+        .spawn()
+        .unwrap();
+    if let Some(input) = input {
+        child
+            .stdin
+            .take()
+            .unwrap()
+            .write_all(input.as_bytes())
+            .unwrap();
+    } else {
+        drop(child.stdin.take());
+    }
+    let output = child.wait_with_output().unwrap();
+    let json = serde_json::from_slice(&output.stdout).unwrap_or_else(|_| {
+        panic!(
+            "stdout={} stderr={}",
+            String::from_utf8_lossy(&output.stdout),
+            String::from_utf8_lossy(&output.stderr)
+        )
+    });
+    (output.status.code().unwrap(), json)
+}
+fn private_file(path: &Path, bytes: &[u8]) {
+    fs::write(path, bytes).unwrap();
+    fs::set_permissions(path, fs::Permissions::from_mode(0o600)).unwrap();
+}
+#[test]
+fn readonly_missing_state_never_creates_it_and_invalid_input_is_bounded() {
+    let temp = tempfile::tempdir_in(std::env::temp_dir().canonicalize().unwrap()).unwrap();
+    let state = temp.path().join("missing");
+    for command in [["status"], ["doctor"]] {
+        assert_eq!(call(&state, &command, None).0, 0);
+        assert!(!state.exists());
+    }
+    assert_eq!(
+        call(
+            &state,
+            &["pair", "--input-stdin"],
+            Some("{\"password\":\"do-not-print\"}")
+        )
+        .0,
+        2
+    );
+    assert!(!state.exists());
+    assert_eq!(
+        call(&state, &["pair", "--input-stdin"], Some(&"x".repeat(65537))).0,
+        2
+    );
+    assert!(!state.exists());
+}
+#[test]
+fn credentials_update_preserves_binding_credential_and_execution_journal() {
+    let temp = tempfile::tempdir_in(std::env::temp_dir().canonicalize().unwrap()).unwrap();
+    let state = temp.path().join("state");
+    let _root = xscc::storage::prepare_root(&state).unwrap();
+    let store = ProtectedState::open(&state.join("provisioning")).unwrap();
+    let binding = json!({"manager_id":uuid::Uuid::new_v4(),"device_id":uuid::Uuid::new_v4(),"installation_id":uuid::Uuid::new_v4()});
+    let identity = json!({"binding":binding,"credential":"b".repeat(64),"enrolled":true,"sunshine_version":xscs_protocol::SUNSHINE_VERSION,"config":{"manager_endpoint":"wss://manager.example/xscc/v1/connect","enrollment_token":"","sunshine_endpoint":"https://127.0.0.1:47990/","sunshine_username":"old","sunshine_password":"old-secret"}});
+    store
+        .put("identity.json", &serde_json::to_vec(&identity).unwrap())
+        .unwrap();
+    drop(store);
+    fs::create_dir(state.join("journal")).unwrap();
+    fs::set_permissions(state.join("journal"), fs::Permissions::from_mode(0o700)).unwrap();
+    private_file(
+        &state.join("journal/evidence"),
+        b"unchanged execution facts",
+    );
+    let (exit, result) = call(
+        &state,
+        &["credentials", "update", "--input-stdin"],
+        Some(r#"{"sunshine_username":"new","sunshine_password":"new-secret"}"#),
+    );
+    assert_eq!(exit, 0, "{result}");
+    assert!(!result.to_string().contains("new-secret"));
+    let store = ProtectedState::open_readonly(&state.join("provisioning")).unwrap();
+    let current: Value =
+        serde_json::from_slice(&store.read("identity.json").unwrap().unwrap()).unwrap();
+    assert_eq!(current["binding"], binding);
+    assert_eq!(current["credential"], identity["credential"]);
+    assert_eq!(current["config"]["sunshine_password"], "new-secret");
+    assert!(current["config"].get("sunshine_certificate").is_none());
+    assert_eq!(
+        fs::read(state.join("journal/evidence")).unwrap(),
+        b"unchanged execution facts"
+    );
+    let guard = MaintenanceGuard::acquire(&state).unwrap();
+    assert_eq!(
+        call(
+            &state,
+            &["credentials", "update", "--input-stdin"],
+            Some(r#"{"sunshine_username":"other","sunshine_password":"blocked"}"#)
+        )
+        .0,
+        5
+    );
+    assert_eq!(call(&state, &["status"], None).0, 0);
+    drop(guard);
+}
+
+#[test]
+fn legacy_pairing_state_is_identified_and_bad_journal_blocks_replacement() {
+    let temp = tempfile::tempdir_in(std::env::temp_dir().canonicalize().unwrap()).unwrap();
+    let state = temp.path().join("state");
+    let _root = xscc::storage::prepare_root(&state).unwrap();
+    let store = ProtectedState::open(&state.join("provisioning")).unwrap();
+    let legacy = json!({
+        "manager_endpoint": "wss://manager.example/xscc/v1/connect",
+        "enrollment_token": "a".repeat(xscs_protocol::AUTHORIZATION_CODE_LENGTH),
+        "sunshine_endpoint": "https://127.0.0.1:47990/",
+        "sunshine_username": "old",
+        "sunshine_password": "old-secret",
+        "restart_allowed": true
+    });
+    let legacy_bytes = serde_json::to_vec(&legacy).unwrap();
+    store.put("identity.json", &legacy_bytes).unwrap();
+    drop(store);
+
+    let status = call(&state, &["pair", "status"], None);
+    assert_eq!(status.0, 4, "{}", status.1);
+    assert_eq!(status.1["error"]["code"], "pairing_state_incompatible");
+
+    fs::create_dir(state.join("journal")).unwrap();
+    fs::set_permissions(state.join("journal"), fs::Permissions::from_mode(0o700)).unwrap();
+    private_file(
+        &state.join("journal/op_00000000-0000-4000-8000-000000000001.json"),
+        b"not-json-important-data",
+    );
+    let replacement = json!({
+        "server": "https://manager.example/",
+        "authorization_code": "b".repeat(xscs_protocol::AUTHORIZATION_CODE_LENGTH),
+        "sunshine_endpoint": "https://127.0.0.1:47990/",
+        "sunshine_username": "new",
+        "sunshine_password": "new-secret"
+    });
+    let result = call(
+        &state,
+        &["pair", "replace", "--input-stdin"],
+        Some(&replacement.to_string()),
+    );
+    assert_eq!(result.0, 10, "{}", result.1);
+    assert_eq!(result.1["error"]["code"], "important_state_incompatible");
+    assert_eq!(
+        result.1["error"]["detail"],
+        "artifact=execution-journal;preserved=true"
+    );
+
+    let store = ProtectedState::open_readonly(&state.join("provisioning")).unwrap();
+    assert_eq!(store.read("identity.json").unwrap().unwrap(), legacy_bytes);
+    assert_eq!(
+        fs::read(state.join("journal/op_00000000-0000-4000-8000-000000000001.json")).unwrap(),
+        b"not-json-important-data"
+    );
+}
+#[test]
+fn configuration_revision_conflict_cannot_change_settings() {
+    let temp = tempfile::tempdir_in(std::env::temp_dir().canonicalize().unwrap()).unwrap();
+    let state = temp.path().join("state");
+    assert_eq!(call(&state, &["config", "init"], None).0, 0);
+    let before = call(&state, &["config", "show"], None);
+    assert_eq!(before.0, 0);
+    let candidate = temp.path().join("candidate.json");
+    private_file(
+        &candidate,
+        br#"{"sunshine_endpoint":"https://127.0.0.1:47991/"}"#,
+    );
+    let result = call(
+        &state,
+        &[
+            "config",
+            "apply",
+            "--file",
+            candidate.to_str().unwrap(),
+            "--expected-revision",
+            "old-revision",
+        ],
+        None,
+    );
+    assert_eq!(result.0, 5, "{}", result.1);
+    assert_eq!(call(&state, &["config", "show"], None).1, before.1);
+}
+
+#[test]
+#[ignore = "requires loopback sockets"]
+fn network_doctor_honors_timeout_when_tls_handshake_stalls() {
+    let listener = std::net::TcpListener::bind("127.0.0.1:0").unwrap();
+    let temp = tempfile::tempdir_in(std::env::temp_dir().canonicalize().unwrap()).unwrap();
+    let state = temp.path().join("state");
+    let _root = xscc::storage::prepare_root(&state).unwrap();
+    let store = ProtectedState::open(&state.join("provisioning")).unwrap();
+    let bootstrap = json!({
+        "manager_endpoint": format!("wss://{}/xscc/v1/connect", listener.local_addr().unwrap()),
+        "enrollment_token": "a".repeat(xscs_protocol::AUTHORIZATION_CODE_LENGTH),
+        "sunshine_endpoint": "https://127.0.0.1:47990/",
+        "sunshine_username": "fixture-user",
+        "sunshine_password": "fixture-password"
+    });
+    let bytes = serde_json::to_vec(&bootstrap).unwrap();
+    store.put("bootstrap.json", &bytes).unwrap();
+    drop(store);
+
+    // Keep the socket listening without responding to the TLS handshake.
+    let started = std::time::Instant::now();
+    let result = call(&state, &["doctor", "--network", "--timeout", "200ms"], None);
+    let elapsed = started.elapsed();
+    assert_eq!(result.0, 9, "{}", result.1);
+    assert_eq!(result.1["error"]["code"], "network_probe_timeout");
+    assert!(result.1["error"]["retryable"].as_bool().unwrap());
+    assert!(elapsed < std::time::Duration::from_secs(3), "{elapsed:?}");
+    let store = ProtectedState::open_readonly(&state.join("provisioning")).unwrap();
+    assert_eq!(store.read("bootstrap.json").unwrap().unwrap(), bytes);
+    assert!(!result.1.to_string().contains("fixture-password"));
+}

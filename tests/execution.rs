@@ -1,0 +1,805 @@
+use async_trait::async_trait;
+use serde_json::json;
+use std::{
+    collections::BTreeMap,
+    sync::{Arc, Mutex},
+};
+use uuid::Uuid;
+use xscc::{
+    adapter::{AdapterError, Configuration, Sunshine},
+    engine::*,
+};
+use xscs_protocol::{config::FieldValue, *};
+
+fn configuration(qp: &str) -> Configuration {
+    Configuration::from_response(json!({
+        "status": true, "platform": "linux", "version": SUNSHINE_VERSION,
+        "qp": qp, "sunshine_name": "主机", "global_prep_cmd": "[{\"do\":\"local-only\"}]",
+        "file_apps": "/private/apps.json", "unmanaged_option": "leave-me-alone"
+    }))
+    .unwrap()
+}
+
+struct Fixture {
+    configuration: Configuration,
+    reads: usize,
+    saves: usize,
+    restarts: usize,
+    lose_write_receipt: bool,
+    lose_restart_receipt: bool,
+    fail_read: bool,
+    unchanged_restart: bool,
+    conflict_on_second_read: bool,
+    pairing_calls: usize,
+    reject_pairing: bool,
+}
+
+impl Default for Fixture {
+    fn default() -> Self {
+        Self {
+            configuration: configuration("28"),
+            reads: 0,
+            saves: 0,
+            restarts: 0,
+            lose_write_receipt: false,
+            lose_restart_receipt: false,
+            fail_read: false,
+            unchanged_restart: false,
+            conflict_on_second_read: false,
+            pairing_calls: 0,
+            reject_pairing: false,
+        }
+    }
+}
+
+#[derive(Clone, Default)]
+struct FakeSunshine(Arc<Mutex<Fixture>>);
+
+#[async_trait]
+impl Sunshine for FakeSunshine {
+    async fn pending_pairings(&mut self) -> Result<Vec<PendingPairing>, AdapterError> {
+        Ok(vec![PendingPairing {
+            id: "a".repeat(32),
+            name: "Moonlight TV".into(),
+            address: "192.168.1.20".into(),
+        }])
+    }
+    async fn submit_pairing_pin(
+        &mut self,
+        _id: &str,
+        _pin: &str,
+        _name: &str,
+    ) -> Result<(), AdapterError> {
+        let mut fixture = self.0.lock().unwrap();
+        fixture.pairing_calls += 1;
+        if fixture.reject_pairing {
+            Err(AdapterError::PairingRejected)
+        } else {
+            Ok(())
+        }
+    }
+    async fn read(&mut self) -> Result<Configuration, AdapterError> {
+        let mut fixture = self.0.lock().unwrap();
+        fixture.reads += 1;
+        if fixture.fail_read {
+            return Err(AdapterError::ApiUnavailable);
+        }
+        if fixture.conflict_on_second_read && fixture.reads == 2 {
+            fixture.configuration = configuration("30");
+        }
+        Ok(fixture.configuration.clone())
+    }
+    async fn save(&mut self, configuration: &Configuration) -> Result<(), AdapterError> {
+        let mut fixture = self.0.lock().unwrap();
+        fixture.saves += 1;
+        fixture.configuration = configuration.clone();
+        if fixture.lose_write_receipt {
+            Err(AdapterError::ApiUnavailable)
+        } else {
+            Ok(())
+        }
+    }
+    async fn process_generation(&mut self) -> Option<String> {
+        let fixture = self.0.lock().unwrap();
+        Some(format!(
+            "generation-{}",
+            if fixture.unchanged_restart {
+                0
+            } else {
+                fixture.restarts
+            }
+        ))
+    }
+    async fn service_status(&mut self) -> Result<ServiceState, AdapterError> {
+        Ok(ServiceState::Running)
+    }
+    async fn control_service(
+        &mut self,
+        _action: ServiceAction,
+    ) -> Result<ServiceState, AdapterError> {
+        Err(AdapterError::ApiUnavailable)
+    }
+    async fn restart(&mut self) -> Result<(), AdapterError> {
+        let mut fixture = self.0.lock().unwrap();
+        fixture.restarts += 1;
+        if fixture.lose_restart_receipt {
+            Err(AdapterError::ApiUnavailable)
+        } else {
+            Ok(())
+        }
+    }
+}
+
+#[derive(Default)]
+struct Records {
+    values: BTreeMap<String, ExecutionRecord>,
+    writes: usize,
+    fail_write: Option<usize>,
+    full: bool,
+}
+
+#[derive(Clone, Default)]
+struct MemoryJournal(Arc<Mutex<Records>>);
+
+impl Journal for MemoryJournal {
+    fn load(&mut self, id: &str) -> Result<Option<ExecutionRecord>, JournalError> {
+        Ok(self.0.lock().unwrap().values.get(id).cloned())
+    }
+    fn create(&mut self, id: &str, record: &ExecutionRecord) -> Result<(), JournalError> {
+        if self.0.lock().unwrap().full {
+            return Err(JournalError::Full);
+        }
+        self.replace(id, record)
+    }
+    fn replace(&mut self, id: &str, record: &ExecutionRecord) -> Result<(), JournalError> {
+        let mut records = self.0.lock().unwrap();
+        records.writes += 1;
+        if records.fail_write == Some(records.writes) {
+            return Err(JournalError::Storage);
+        }
+        records.values.insert(id.into(), record.clone());
+        Ok(())
+    }
+}
+
+fn binding() -> Binding {
+    Binding {
+        manager_id: Uuid::from_u128(1),
+        device_id: Uuid::from_u128(2),
+        installation_id: Uuid::from_u128(3),
+    }
+}
+
+fn patch() -> Task {
+    Task {
+        protocol: TASK_PROTOCOL.into(),
+        operation_id: format!("op_{}", Uuid::new_v4()),
+        binding: binding(),
+        permission: Permission::WriteConfig,
+        command: Command::PatchConfig {
+            expected_revision: configuration("28").revision(),
+            set: BTreeMap::from([("qp".into(), FieldValue::Integer(29))]),
+            remove: Default::default(),
+            restart_policy: RestartPolicy::Manual,
+        },
+    }
+}
+
+fn restart() -> Task {
+    let mut task = patch();
+    task.permission = Permission::Restart;
+    task.command = Command::Restart {
+        expected_revision: configuration("28").revision(),
+        administrator_confirmed: true,
+    };
+    task
+}
+
+#[tokio::test]
+async fn moonlight_pin_is_sent_once_and_confirmed_failure_is_terminal() {
+    for rejected in [false, true] {
+        let sunshine = FakeSunshine::default();
+        sunshine.0.lock().unwrap().reject_pairing = rejected;
+        let executor = Executor::new(binding(), sunshine.clone(), MemoryJournal::default());
+        let mut task = patch();
+        task.permission = Permission::ManagePairing;
+        task.command = Command::SubmitPairingPin {
+            pairing_id: "a".repeat(32),
+            pin: "1234".into(),
+            name: "Moonlight TV".into(),
+        };
+        let expected = if rejected {
+            Report::Rejected {
+                reason: Rejection::PairingFailed,
+            }
+        } else {
+            Report::PairingPinSubmitted {}
+        };
+        assert_eq!(
+            executor.deliver(&task, DeliveryMode::Execute).await,
+            expected
+        );
+        assert_eq!(
+            executor.deliver(&task, DeliveryMode::Execute).await,
+            expected
+        );
+        assert_eq!(
+            executor.deliver(&task, DeliveryMode::InspectOnly).await,
+            expected
+        );
+        assert_eq!(sunshine.0.lock().unwrap().pairing_calls, 1);
+        task.operation_id = format!("op_{}", Uuid::new_v4());
+        task.command = Command::ListPendingPairings {};
+        let Report::PendingPairingsRead { pairings } =
+            executor.deliver(&task, DeliveryMode::Execute).await
+        else {
+            panic!("pending pairing request was not returned")
+        };
+        assert_eq!(pairings[0].id, "a".repeat(32));
+    }
+}
+
+fn overwrite() -> Task {
+    let mut task = patch();
+    let set = BTreeMap::from([
+        ("qp".into(), FieldValue::Integer(29)),
+        ("sunshine_name".into(), FieldValue::Text("主机".into())),
+    ]);
+    let remove = config::FIELD_DEFINITIONS
+        .iter()
+        .filter(|field| {
+            field.operating_systems.contains(&"linux_x86_64") && !set.contains_key(field.key)
+        })
+        .map(|field| field.key.to_owned())
+        .collect();
+    task.command = Command::SaveConfig {
+        set,
+        remove,
+        restart_policy: RestartPolicy::Manual,
+    };
+    task
+}
+
+#[tokio::test]
+async fn overwrite_uses_frozen_managed_snapshot_and_current_local_only_settings() {
+    let sunshine = FakeSunshine::default();
+    sunshine.0.lock().unwrap().configuration = Configuration::from_response(json!({
+        "status": true, "platform": "linux", "version": SUNSHINE_VERSION,
+        "qp": "40", "sunshine_name": "Changed locally", "min_threads": "4",
+        "amd_usage": "lowlatency",
+        "global_prep_cmd": "[{\"do\":\"new-local-command\"}]",
+        "file_apps": "/new/local/apps.json", "unmanaged_option": "new-local-value"
+    }))
+    .unwrap();
+    let executor = Executor::new(binding(), sunshine.clone(), MemoryJournal::default());
+    let task = overwrite();
+    let report = executor.deliver(&task, DeliveryMode::Execute).await;
+    let Report::ConfigSaved { snapshot } = &report else {
+        panic!("{report:?}")
+    };
+    assert_eq!(snapshot.fields["qp"], "29");
+    assert_eq!(snapshot.fields["sunshine_name"], "主机");
+    assert!(!snapshot.fields.contains_key("min_threads"));
+    assert!(!snapshot.fields.contains_key("global_prep_cmd"));
+    let expected = Configuration::from_response(json!({
+        "status": true, "platform": "linux", "version": SUNSHINE_VERSION,
+        "qp": "29", "sunshine_name": "主机",
+        "amd_usage": "lowlatency",
+        "global_prep_cmd": "[{\"do\":\"new-local-command\"}]",
+        "file_apps": "/new/local/apps.json", "unmanaged_option": "new-local-value"
+    }))
+    .unwrap();
+    assert_eq!(snapshot.revision, expected.revision());
+    assert_eq!(report, executor.deliver(&task, DeliveryMode::Execute).await);
+    let fixture = sunshine.0.lock().unwrap();
+    assert_eq!(fixture.configuration.revision(), expected.revision());
+    assert_eq!(fixture.saves, 1);
+    assert_eq!(fixture.restarts, 0);
+}
+
+#[tokio::test]
+async fn overwrite_reconciles_a_lost_receipt_without_repeating_the_write() {
+    let sunshine = FakeSunshine::default();
+    sunshine.0.lock().unwrap().lose_write_receipt = true;
+    let executor = Executor::new(binding(), sunshine.clone(), MemoryJournal::default());
+    let task = overwrite();
+    let first = executor.deliver(&task, DeliveryMode::Execute).await;
+    assert!(matches!(first, Report::ConfigSaved { .. }));
+    assert_eq!(
+        first,
+        executor.deliver(&task, DeliveryMode::InspectOnly).await
+    );
+    assert_eq!(first, executor.deliver(&task, DeliveryMode::Execute).await);
+    assert_eq!(sunshine.0.lock().unwrap().saves, 1);
+}
+
+#[tokio::test]
+async fn partial_patch_preserves_all_untouched_fields_and_never_restarts() {
+    let sunshine = FakeSunshine::default();
+    let executor = Executor::new(binding(), sunshine.clone(), MemoryJournal::default());
+    let report = executor.deliver(&patch(), DeliveryMode::Execute).await;
+    let Report::ConfigSaved { snapshot } = report else {
+        panic!("{report:?}")
+    };
+    assert_eq!(snapshot.effectiveness, Effectiveness::AwaitingRestart);
+    assert_eq!(snapshot.fields["qp"], "29");
+    assert!(!snapshot.fields.contains_key("global_prep_cmd"));
+    assert!(!snapshot.fields.contains_key("file_apps"));
+    let fixture = sunshine.0.lock().unwrap();
+    assert_eq!(
+        fixture.configuration.revision(),
+        configuration("29").revision()
+    );
+    assert_eq!(fixture.saves, 1);
+    assert_eq!(fixture.restarts, 0);
+}
+
+#[tokio::test]
+async fn duplicate_delivery_returns_result_without_repeating_side_effects() {
+    let sunshine = FakeSunshine::default();
+    let executor = Executor::new(binding(), sunshine.clone(), MemoryJournal::default());
+    let task = patch();
+    let first = executor.deliver(&task, DeliveryMode::Execute).await;
+    assert_eq!(first, executor.deliver(&task, DeliveryMode::Execute).await);
+    assert_eq!(
+        first,
+        executor.deliver(&task, DeliveryMode::InspectOnly).await
+    );
+    assert_eq!(sunshine.0.lock().unwrap().saves, 1);
+}
+
+#[tokio::test]
+async fn removal_only_deletes_the_requested_managed_field() {
+    let sunshine = FakeSunshine::default();
+    let executor = Executor::new(binding(), sunshine.clone(), MemoryJournal::default());
+    let mut task = patch();
+    let Command::PatchConfig { set, remove, .. } = &mut task.command else {
+        unreachable!()
+    };
+    set.clear();
+    remove.insert("qp".into());
+    let report = executor.deliver(&task, DeliveryMode::Execute).await;
+    let Report::ConfigSaved { snapshot } = report else {
+        panic!("{report:?}")
+    };
+    assert!(!snapshot.fields.contains_key("qp"));
+    let expected = Configuration::from_response(json!({
+        "status": true, "platform": "linux", "version": SUNSHINE_VERSION,
+        "sunshine_name": "主机", "global_prep_cmd": "[{\"do\":\"local-only\"}]",
+        "file_apps": "/private/apps.json", "unmanaged_option": "leave-me-alone"
+    }))
+    .unwrap();
+    assert_eq!(snapshot.revision, expected.revision());
+    assert_eq!(sunshine.0.lock().unwrap().saves, 1);
+}
+
+#[tokio::test]
+async fn an_uncertain_save_is_not_retried_even_when_old_configuration_is_still_present() {
+    let sunshine = FakeSunshine::default();
+    let journal = MemoryJournal::default();
+    let task = patch();
+    // The session changed, but the current task contract and persisted identity did not.
+    assert_eq!(task.protocol, "sunshine-task/1");
+    assert_ne!(task.protocol, PROTOCOL);
+    journal.0.lock().unwrap().values.insert(
+        task.operation_id.clone(),
+        ExecutionRecord {
+            fingerprint: task.fingerprint().unwrap(),
+            effect: Some(EffectIntent::Save {
+                target_revision: configuration("29").revision(),
+            }),
+            report: None,
+            acknowledged: false,
+            binding: None,
+            accepted_digest: None,
+        },
+    );
+    let executor = Executor::new(binding(), sunshine.clone(), journal.clone());
+    for mode in [DeliveryMode::Execute, DeliveryMode::InspectOnly] {
+        assert_eq!(
+            executor.deliver(&task, mode).await,
+            Report::Unknown {
+                reason: Uncertainty::EffectNotConfirmed
+            }
+        );
+    }
+    assert_eq!(sunshine.0.lock().unwrap().saves, 0);
+    let records = journal.0.lock().unwrap();
+    let record = &records.values[&task.operation_id];
+    assert_eq!(record.fingerprint, task.fingerprint().unwrap());
+    assert!(matches!(record.effect, Some(EffectIntent::Save { .. })));
+}
+
+#[tokio::test]
+async fn reused_operation_id_with_changed_content_is_rejected() {
+    let executor = Executor::new(binding(), FakeSunshine::default(), MemoryJournal::default());
+    let task = patch();
+    executor.deliver(&task, DeliveryMode::Execute).await;
+    let mut changed = task;
+    changed.command = Command::ReadConfig {};
+    changed.permission = Permission::ReadConfig;
+    assert_eq!(
+        executor.deliver(&changed, DeliveryMode::Execute).await,
+        Report::Rejected {
+            reason: Rejection::OperationIdReused
+        }
+    );
+}
+
+#[tokio::test]
+async fn simultaneous_modifications_with_same_revision_have_one_winner() {
+    let sunshine = FakeSunshine::default();
+    let executor = Executor::new(binding(), sunshine.clone(), MemoryJournal::default());
+    let a = patch();
+    let b = patch();
+    let (a, b) = tokio::join!(
+        executor.deliver(&a, DeliveryMode::Execute),
+        executor.deliver(&b, DeliveryMode::Execute)
+    );
+    assert!(matches!(a, Report::ConfigSaved { .. }));
+    assert!(matches!(b, Report::Conflict { .. }));
+    assert_eq!(sunshine.0.lock().unwrap().saves, 1);
+}
+
+#[tokio::test]
+async fn conflict_on_pre_effect_read_never_writes() {
+    let sunshine = FakeSunshine::default();
+    sunshine.0.lock().unwrap().conflict_on_second_read = true;
+    let executor = Executor::new(binding(), sunshine.clone(), MemoryJournal::default());
+    assert!(matches!(
+        executor.deliver(&patch(), DeliveryMode::Execute).await,
+        Report::Conflict { .. }
+    ));
+    assert_eq!(sunshine.0.lock().unwrap().saves, 0);
+}
+
+#[tokio::test]
+async fn lost_save_receipt_is_verified_by_full_readback() {
+    let sunshine = FakeSunshine::default();
+    sunshine.0.lock().unwrap().lose_write_receipt = true;
+    let executor = Executor::new(binding(), sunshine.clone(), MemoryJournal::default());
+    assert!(matches!(
+        executor.deliver(&patch(), DeliveryMode::Execute).await,
+        Report::ConfigSaved { .. }
+    ));
+    assert_eq!(sunshine.0.lock().unwrap().saves, 1);
+}
+
+#[tokio::test]
+async fn crash_after_save_before_result_persistence_reconciles_without_reexecution() {
+    let sunshine = FakeSunshine::default();
+    let journal = MemoryJournal::default();
+    journal.0.lock().unwrap().fail_write = Some(3);
+    let task = patch();
+    let executor = Executor::new(binding(), sunshine.clone(), journal.clone());
+    assert_eq!(
+        executor.deliver(&task, DeliveryMode::Execute).await,
+        Report::Unknown {
+            reason: Uncertainty::PersistenceFailure
+        }
+    );
+    drop(executor);
+    let recovered = Executor::new(binding(), sunshine.clone(), journal);
+    assert!(matches!(
+        recovered.deliver(&task, DeliveryMode::InspectOnly).await,
+        Report::ConfigSaved { .. }
+    ));
+    assert_eq!(sunshine.0.lock().unwrap().saves, 1);
+}
+
+#[tokio::test]
+async fn persistence_failure_before_effect_fails_closed() {
+    for fail_write in [1, 2] {
+        let sunshine = FakeSunshine::default();
+        let journal = MemoryJournal::default();
+        journal.0.lock().unwrap().fail_write = Some(fail_write);
+        let executor = Executor::new(binding(), sunshine.clone(), journal);
+        assert!(matches!(
+            executor.deliver(&patch(), DeliveryMode::Execute).await,
+            Report::Unknown { .. }
+        ));
+        assert_eq!(sunshine.0.lock().unwrap().saves, 0);
+    }
+}
+
+#[tokio::test]
+async fn lost_restart_receipt_never_triggers_another_restart() {
+    let sunshine = FakeSunshine::default();
+    sunshine.0.lock().unwrap().lose_restart_receipt = true;
+    let journal = MemoryJournal::default();
+    let task = restart();
+    let executor = Executor::new(binding(), sunshine.clone(), journal.clone());
+    let report = executor.deliver(&task, DeliveryMode::Execute).await;
+    assert!(matches!(report, Report::RestartAcknowledged { .. }));
+    drop(executor);
+    let recovered = Executor::new(binding(), sunshine.clone(), journal);
+    assert_eq!(
+        recovered.deliver(&task, DeliveryMode::Execute).await,
+        report
+    );
+    assert_eq!(sunshine.0.lock().unwrap().restarts, 1);
+}
+
+#[tokio::test]
+async fn restart_receipt_and_reachability_are_not_runtime_effectiveness() {
+    let executor = Executor::new(binding(), FakeSunshine::default(), MemoryJournal::default());
+    let Report::RestartAcknowledged { snapshot, .. } =
+        executor.deliver(&restart(), DeliveryMode::Execute).await
+    else {
+        panic!("expected acknowledgement")
+    };
+    assert_eq!(snapshot.effectiveness, Effectiveness::PendingVerification);
+}
+
+#[tokio::test]
+async fn inspect_unknown_operation_is_read_only_and_does_not_guess() {
+    let sunshine = FakeSunshine::default();
+    let executor = Executor::new(binding(), sunshine.clone(), MemoryJournal::default());
+    assert_eq!(
+        executor
+            .deliver(&restart(), DeliveryMode::InspectOnly)
+            .await,
+        Report::Unknown {
+            reason: Uncertainty::NoExecutionRecord
+        }
+    );
+    assert_eq!(sunshine.0.lock().unwrap().restarts, 0);
+}
+
+#[tokio::test]
+async fn journal_capacity_exhaustion_rejects_instead_of_evicting_deduplication() {
+    let sunshine = FakeSunshine::default();
+    let journal = MemoryJournal::default();
+    journal.0.lock().unwrap().full = true;
+    let executor = Executor::new(binding(), sunshine.clone(), journal);
+    assert_eq!(
+        executor.deliver(&patch(), DeliveryMode::Execute).await,
+        Report::Rejected {
+            reason: Rejection::JournalFull
+        }
+    );
+    assert_eq!(sunshine.0.lock().unwrap().reads, 0);
+}
+
+#[test]
+fn configuration_metadata_and_unsupported_versions_are_not_saved() {
+    assert!(matches!(
+        Configuration::from_response(
+            json!({"status": true, "platform": "linux", "version": "master"})
+        ),
+        Err(AdapterError::UnsupportedVersion {
+            detected: Some(ref version),
+            ..
+        }) if version == "master"
+    ));
+    assert_eq!(Configuration::from_response(json!({"status": true, "platform": "linux", "version": SUNSHINE_VERSION, "status_code": 200})).err(), Some(AdapterError::UnsafeConfiguration));
+    let empty = Configuration::from_response(
+        json!({"status": true, "platform": "linux", "version": SUNSHINE_VERSION}),
+    )
+    .unwrap();
+    assert!(
+        empty
+            .snapshot(Effectiveness::PendingVerification)
+            .fields
+            .is_empty()
+    );
+    assert!(matches!(
+        Configuration::from_response(
+            json!({"status": true, "platform": "linux", "version": "2026.516.143833"}),
+        ),
+        Err(AdapterError::UnsupportedVersion {
+            detected: Some(ref version),
+            ..
+        }) if version == "2026.516.143833"
+    ));
+    assert!(matches!(
+        Configuration::from_response(
+            json!({"status": true, "platform": "linux", "version": "bad\nversion"}),
+        ),
+        Err(AdapterError::UnsupportedVersion { detected: None, .. })
+    ));
+}
+
+#[test]
+fn endpoint_policy_rejects_remote_hosts_plaintext_credentials_and_paths() {
+    use url::Url;
+    use xscc::adapter::validate_local_endpoint;
+    for url in [
+        "http://127.0.0.1:47990",
+        "https://example.com",
+        "https://192.168.1.2",
+        "https://localhost",
+        "https://user:secret@127.0.0.1",
+        "https://127.0.0.1/api",
+        "https://127.0.0.1/?query",
+        "https://127.0.0.1/#fragment",
+    ] {
+        assert!(
+            validate_local_endpoint(&Url::parse(url).unwrap()).is_err(),
+            "{url}"
+        );
+    }
+    for url in ["https://127.0.0.1:47990", "https://[::1]:47990"] {
+        assert!(validate_local_endpoint(&Url::parse(url).unwrap()).is_ok());
+    }
+}
+
+#[tokio::test]
+async fn failed_service_restart_with_old_running_process_is_unknown() {
+    let sunshine = FakeSunshine::default();
+    let mut capabilities = Capabilities {
+        protocol: PROTOCOL.into(),
+        client_version: "test".into(),
+        os: ClientOs::LinuxX86_64,
+        sunshine_version: SUNSHINE_VERSION.into(),
+        configuration_overwrite: true,
+        pending_pairing_listing: true,
+        restart_allowed: true,
+        managed_fields: config::FIELD_DEFINITIONS
+            .iter()
+            .map(|f| f.key.to_owned())
+            .collect(),
+        application_management: true,
+        application_host_commands_allowed: true,
+        moonlight_pairing_management: true,
+        diagnostics: true,
+        maintenance: true,
+        service_control: true,
+    };
+    capabilities.service_control = true;
+    let executor = Executor::new_with_capabilities(
+        binding(),
+        capabilities,
+        sunshine,
+        MemoryJournal::default(),
+    );
+    let mut task = restart();
+    task.permission = Permission::ControlService;
+    task.command = Command::ControlService {
+        action: ServiceAction::Restart,
+        administrator_confirmed: true,
+    };
+    assert_eq!(
+        executor.deliver(&task, DeliveryMode::Execute).await,
+        Report::Unknown {
+            reason: Uncertainty::ServiceTransitionNotConfirmed
+        }
+    );
+    assert_eq!(
+        executor.deliver(&task, DeliveryMode::InspectOnly).await,
+        Report::Unknown {
+            reason: Uncertainty::ServiceTransitionNotConfirmed
+        }
+    );
+}
+
+#[tokio::test]
+async fn expired_delivery_never_writes_but_inspection_ignores_expiry() {
+    let sunshine = FakeSunshine::default();
+    let executor = Executor::new(binding(), sunshine.clone(), MemoryJournal::default());
+    let task = patch();
+    let deadline = ExecutionDeadline::received(0, 0);
+    assert_eq!(
+        executor
+            .deliver_before(&task, DeliveryMode::Execute, Some(deadline))
+            .await,
+        Report::Rejected {
+            reason: Rejection::ExecutionExpired
+        }
+    );
+    assert_eq!(sunshine.0.lock().unwrap().saves, 0);
+    let task = patch();
+    let saved = executor.deliver(&task, DeliveryMode::Execute).await;
+    assert_eq!(
+        executor
+            .deliver_before(
+                &task,
+                DeliveryMode::InspectOnly,
+                Some(ExecutionDeadline::received(0, 0))
+            )
+            .await,
+        saved
+    );
+}
+
+#[tokio::test]
+async fn acknowledgment_checks_digest_and_compacts_without_allowing_reexecution() {
+    let sunshine = FakeSunshine::default();
+    let journal = MemoryJournal::default();
+    let executor = Executor::new(binding(), sunshine.clone(), journal.clone());
+    let task = patch();
+    let report = executor.deliver(&task, DeliveryMode::Execute).await;
+    assert!(
+        executor
+            .acknowledge(
+                &task.operation_id,
+                &task.fingerprint().unwrap(),
+                &"0".repeat(64)
+            )
+            .await
+            .is_err()
+    );
+    executor
+        .acknowledge(
+            &task.operation_id,
+            &task.fingerprint().unwrap(),
+            &report_digest(&report).unwrap(),
+        )
+        .await
+        .unwrap();
+    let compact = journal.0.lock().unwrap().values[&task.operation_id].clone();
+    assert!(compact.acknowledged && compact.report.is_none() && compact.effect.is_none());
+    assert_eq!(
+        executor.deliver(&task, DeliveryMode::Execute).await,
+        Report::Rejected {
+            reason: Rejection::OperationAlreadyCompleted
+        }
+    );
+    assert_eq!(sunshine.0.lock().unwrap().saves, 1);
+}
+
+#[tokio::test]
+async fn diagnostics_remain_available_when_journal_has_no_free_slots() {
+    let sunshine = FakeSunshine::default();
+    let journal = MemoryJournal::default();
+    journal.0.lock().unwrap().full = true;
+    let executor = Executor::new(binding(), sunshine.clone(), journal);
+    let mut task = patch();
+    task.command = Command::ReadConfig {};
+    task.permission = Permission::ReadConfig;
+    assert!(matches!(
+        executor.deliver(&task, DeliveryMode::Execute).await,
+        Report::ConfigRead { .. }
+    ));
+    assert_eq!(sunshine.0.lock().unwrap().saves, 0);
+}
+
+#[tokio::test]
+async fn uncertain_intent_is_retained_until_a_final_manager_resolution() {
+    let task = restart();
+    let journal = MemoryJournal::default();
+    let report = Report::Unknown {
+        reason: Uncertainty::RestartNotConfirmed,
+    };
+    journal.0.lock().unwrap().values.insert(
+        task.operation_id.clone(),
+        ExecutionRecord {
+            fingerprint: task.fingerprint().unwrap(),
+            effect: Some(EffectIntent::Restart),
+            report: Some(report.clone()),
+            acknowledged: false,
+            binding: Some(binding()),
+            accepted_digest: None,
+        },
+    );
+    let executor = Executor::new(binding(), FakeSunshine::default(), journal.clone());
+    executor
+        .acknowledge(
+            &task.operation_id,
+            &task.fingerprint().unwrap(),
+            &report_digest(&report).unwrap(),
+        )
+        .await
+        .unwrap();
+    assert!(
+        journal.0.lock().unwrap().values[&task.operation_id]
+            .effect
+            .is_some()
+    );
+    executor
+        .acknowledge_final(
+            &task.operation_id,
+            &task.fingerprint().unwrap(),
+            &report_digest(&report).unwrap(),
+            true,
+        )
+        .await
+        .unwrap();
+    assert!(journal.0.lock().unwrap().values[&task.operation_id].acknowledged);
+    assert_eq!(
+        executor.deliver(&task, DeliveryMode::Execute).await,
+        Report::Rejected {
+            reason: Rejection::OperationAlreadyCompleted
+        }
+    );
+}

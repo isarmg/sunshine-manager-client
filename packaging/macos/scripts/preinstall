@@ -1,0 +1,49 @@
+#!/bin/sh
+set -eu
+
+[ "$(uname -s)" = Darwin ] && [ "$(uname -m)" = arm64 ] && [ "$(id -u)" = 0 ] || exit 8
+
+state='/Library/Application Support/xscc'
+plist='/Library/LaunchDaemons/org.sarmg.xscc.plist'
+binary='/usr/local/libexec/xscc'
+link='/usr/local/bin/xscc'
+marker='/private/var/run/org.sarmg.xscc.was-loaded'
+
+# macOS exposes /var/run through an OS-managed alias. Validate the physical
+# directory so the package does not reject the platform's normal filesystem
+# layout while still refusing a redirected runtime directory.
+for path in /Library /Library/LaunchDaemons "/Library/Application Support" /usr/local /usr/local/bin /usr/local/libexec /private/var/run; do
+  [ ! -L "$path" ] || { echo "Refusing symlinked package root: $path" >&2; exit 8; }
+done
+if [ -e "$state" ] || [ -L "$state" ]; then
+  [ -d "$state" ] && [ ! -L "$state" ] || exit 8
+fi
+if [ -e "$binary" ] || [ -L "$binary" ]; then
+  [ -f "$binary" ] && [ ! -L "$binary" ] || exit 8
+fi
+if [ -e "$link" ] || [ -L "$link" ]; then
+  [ -L "$link" ] && [ "$(readlink "$link")" = /usr/local/libexec/xscc ] || exit 8
+fi
+if [ -e "$plist" ] || [ -L "$plist" ]; then
+  [ -f "$plist" ] && [ ! -L "$plist" ] || exit 8
+  /usr/bin/plutil -lint "$plist" >/dev/null
+  /usr/libexec/PlistBuddy -c 'Print :ProgramArguments:0' "$plist" | /usr/bin/grep -qx /usr/local/libexec/xscc || exit 8
+fi
+if [ -e "$marker" ] || [ -L "$marker" ]; then
+  [ -f "$marker" ] && [ ! -L "$marker" ] \
+    && [ "$(stat -f %u "$marker")" = 0 ] \
+    && [ "$(stat -f %Lp "$marker")" = 600 ] \
+    && [ "$(stat -f %l "$marker")" = 1 ] || {
+      echo 'Unsafe launchd transaction marker exists.' >&2
+      exit 8
+    }
+fi
+
+if launchctl print system/org.sarmg.xscc >/dev/null 2>&1; then
+  launchctl bootout system/org.sarmg.xscc
+  # A valid marker can remain after a previous package transaction stopped the
+  # service and then failed. Preserve it so a retry still restores launchd.
+  if [ ! -e "$marker" ]; then
+    (umask 077; set -C; : > "$marker")
+  fi
+fi

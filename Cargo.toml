@@ -1,0 +1,42 @@
+[package]
+name = "xscc"
+version = "1.0.0"
+edition = "2024"
+rust-version = "1.99"
+license = "Apache-2.0"
+publish = false
+
+[dependencies]
+xcss-log = { git = "https://github.com/isarmg/xcss.git", rev = "d58b9ef0822984ee0d29fb8b8139cfd2787374fb", version = "=1.0.0" }
+async-trait = "0.1"
+base64 = "0.23"
+futures-util = { version = "0.3", features = ["sink"] }
+reqwest = { version = "0.13", default-features = false, features = ["http2", "json", "rustls"] }
+rand = "0.10"
+uuid = { version = "1", features = ["v4", "serde"] }
+xcsc-fs-safety = { git = "https://github.com/isarmg/xcsc.git", rev = "a3c827b7f0f69d84ff69f72be1533a7171ab63d6", version = "=1.0.0" }
+xcsc-cli = { git = "https://github.com/isarmg/xcsc.git", rev = "a3c827b7f0f69d84ff69f72be1533a7171ab63d6", version = "=1.0.0" }
+xcsc-runtime = { git = "https://github.com/isarmg/xcsc.git", rev = "a3c827b7f0f69d84ff69f72be1533a7171ab63d6", version = "=1.0.0" }
+serde = { version = "1", features = ["derive"] }
+serde_json = "1"
+sha2 = "0.11"
+xscs-protocol = { git = "https://github.com/isarmg/xscs.git", rev = "f7943abee4bb74eb6b2a86687ca1ce28028070d9", version = "=1.0.0" }
+thiserror = "2"
+tokio = { version = "~1.53.2", features = ["macros", "process", "rt-multi-thread", "sync", "time", "signal"] }
+tokio-tungstenite = { version = "0.30", default-features = false, features = ["connect", "rustls-tls-native-roots"] }
+tokio-rustls = "0.26"
+url = "2"
+zeroize = { version = "1.9.1", features = ["serde"] }
+
+[target.'cfg(target_os = "windows")'.dependencies]
+sqlx = { version = "=0.9.0", default-features = false, features = ["sqlite-bundled"] }
+windows-service = "=0.8.1"
+windows-sys = { version = "0.61", features = ["Win32_Foundation", "Win32_Security", "Win32_Security_Authorization", "Win32_Storage_FileSystem", "Win32_System_Pipes", "Win32_System_IO", "Win32_System_Registry", "Win32_System_Threading", "Win32_System_SystemInformation", "Win32_System_Diagnostics_ToolHelp", "Win32_NetworkManagement_IpHelper", "Win32_Networking_WinSock", "Win32_UI_Shell", "Win32_UI_WindowsAndMessaging"] }
+
+[dev-dependencies]
+sqlx = { version = "=0.9.0", default-features = false, features = ["sqlite-bundled"] }
+uuid = { version = "1", features = ["v4"] }
+tempfile = "3"
+
+[lints.rust]
+unsafe_op_in_unsafe_fn = "deny"

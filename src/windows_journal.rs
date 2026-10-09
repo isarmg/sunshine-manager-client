@@ -1,0 +1,169 @@
+//! Windows execution facts use protected SQLite FULL commits, not a second task lifecycle.
+use crate::{
+    engine::{ExecutionRecord, Journal, JournalError},
+    storage::ProtectedState,
+};
+use std::{collections::BTreeSet, path::Path};
+pub struct FileJournal {
+    store: ProtectedState,
+    ids: BTreeSet<String>,
+    active: BTreeSet<String>,
+    poisoned: bool,
+}
+fn fail(_: impl std::fmt::Debug) -> JournalError {
+    JournalError::Storage
+}
+fn name(id: &str) -> Result<String, JournalError> {
+    let raw = id.strip_prefix("op_").ok_or(JournalError::Storage)?;
+    let uuid = uuid::Uuid::parse_str(raw).map_err(fail)?;
+    if uuid.is_nil() || uuid.to_string() != raw {
+        return Err(JournalError::Storage);
+    }
+    Ok(format!("{id}.json"))
+}
+fn encode(record: &ExecutionRecord) -> Result<Vec<u8>, JournalError> {
+    xscs_protocol::validate_revision(&record.fingerprint).map_err(fail)?;
+    if record.acknowledged && (record.effect.is_some() || record.report.is_some()) {
+        return Err(JournalError::Storage);
+    }
+    if let Some(digest) = &record.accepted_digest {
+        xscs_protocol::validate_revision(digest).map_err(fail)?;
+    }
+    if let Some(
+        crate::engine::EffectIntent::Save { target_revision }
+        | crate::engine::EffectIntent::RestartObserved {
+            target_revision, ..
+        },
+    ) = &record.effect
+    {
+        xscs_protocol::validate_revision(target_revision).map_err(fail)?;
+    }
+    let bytes = serde_json::to_vec(record).map_err(fail)?;
+    if bytes.len() > crate::engine::MAX_RECORD_BYTES {
+        return Err(JournalError::Full);
+    }
+    Ok(bytes)
+}
+impl FileJournal {
+    pub fn open(path: &Path) -> Result<Self, JournalError> {
+        let store = ProtectedState::open(path).map_err(fail)?;
+        let mut ids = BTreeSet::new();
+        let mut active = BTreeSet::new();
+        for key in store.names().map_err(fail)? {
+            let id = key.strip_suffix(".json").ok_or(JournalError::Storage)?;
+            name(id)?;
+            let bytes = store
+                .read(&key)
+                .map_err(fail)?
+                .ok_or(JournalError::Storage)?;
+            let record: ExecutionRecord = serde_json::from_slice(&bytes).map_err(fail)?;
+            encode(&record)?;
+            if !record.acknowledged {
+                active.insert(id.to_owned());
+            }
+            ids.insert(id.to_owned());
+        }
+        if active.len() > 4096 || ids.len() > 1_000_000 {
+            return Err(JournalError::Full);
+        }
+        Ok(Self {
+            store,
+            ids,
+            active,
+            poisoned: false,
+        })
+    }
+}
+impl Journal for FileJournal {
+    fn load(&mut self, id: &str) -> Result<Option<ExecutionRecord>, JournalError> {
+        if self.poisoned {
+            return Err(JournalError::Storage);
+        }
+        self.store
+            .read(&name(id)?)
+            .map_err(fail)?
+            .map(|b| serde_json::from_slice(&b).map_err(fail))
+            .transpose()
+    }
+    fn create(&mut self, id: &str, record: &ExecutionRecord) -> Result<(), JournalError> {
+        if self.poisoned || self.ids.contains(id) {
+            return Err(JournalError::Storage);
+        }
+        if self.active.len() >= 4096 || self.ids.len() >= 1_000_000 {
+            return Err(JournalError::Full);
+        }
+        if self.store.put(&name(id)?, &encode(record)?).is_err() {
+            self.poisoned = true;
+            return Err(JournalError::Storage);
+        }
+        self.ids.insert(id.into());
+        if !record.acknowledged {
+            self.active.insert(id.into());
+        }
+        Ok(())
+    }
+    fn replace(&mut self, id: &str, record: &ExecutionRecord) -> Result<(), JournalError> {
+        let prior = self.load(id)?.ok_or(JournalError::Storage)?;
+        if prior.fingerprint != record.fingerprint
+            || prior.binding != record.binding
+            || (prior.acknowledged && !record.acknowledged)
+            || (prior.effect.is_some() && prior.effect != record.effect && !record.acknowledged)
+            || (!record.acknowledged
+                && prior.report.as_ref().is_some_and(|r| {
+                    !matches!(r, xscs_protocol::Report::Unknown { .. })
+                        && Some(r) != record.report.as_ref()
+                }))
+        {
+            return Err(JournalError::Storage);
+        }
+        if self.store.put(&name(id)?, &encode(record)?).is_err() {
+            self.poisoned = true;
+            return Err(JournalError::Storage);
+        }
+        if record.acknowledged {
+            self.active.remove(id);
+        }
+        Ok(())
+    }
+    fn pending_results(&mut self) -> Result<Vec<(String, ExecutionRecord)>, JournalError> {
+        let mut results = Vec::new();
+        for id in self.active.clone() {
+            if let Some(record) = self.load(&id)?
+                && record.report.as_ref().is_some_and(|report| {
+                    if matches!(report, xscs_protocol::Report::Unknown { .. }) {
+                        return true;
+                    }
+                    xscs_protocol::report_digest(report).ok().as_ref()
+                        != record.accepted_digest.as_ref()
+                })
+            {
+                results.push((id, record));
+            }
+        }
+        Ok(results)
+    }
+}
+
+pub fn inspect(path: &Path, operation: Option<&str>) -> Result<serde_json::Value, JournalError> {
+    let store = ProtectedState::open_readonly(path).map_err(fail)?;
+    let keys = if let Some(id) = operation {
+        vec![name(id)?]
+    } else {
+        store.names().map_err(fail)?
+    };
+    let mut records = Vec::new();
+    for key in keys {
+        let id = key.strip_suffix(".json").ok_or(JournalError::Storage)?;
+        name(id)?;
+        let bytes = store
+            .read(&key)
+            .map_err(fail)?
+            .ok_or(JournalError::Storage)?;
+        let record: ExecutionRecord = serde_json::from_slice(&bytes).map_err(fail)?;
+        encode(&record)?;
+        records.push(
+            serde_json::json!({"operation_id":id,"effect":record.effect,"report":record.report}),
+        );
+    }
+    Ok(serde_json::json!({"scope":"local_execution_observation","records":records}))
+}
