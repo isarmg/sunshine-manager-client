@@ -238,6 +238,9 @@ fn provision_error(e: ProvisionError) -> Failure {
             crate::transport::TransportError::Diagnostics => fail(10, "diagnostics_unavailable"),
             crate::transport::TransportError::Revoked => fail(7, "credential_rejected"),
             crate::transport::TransportError::Disconnected => fail(6, "server_unavailable"),
+            crate::transport::TransportError::ShutdownIncomplete => {
+                fail(9, "shutdown_result_uncertain")
+            }
             crate::transport::TransportError::Protocol => {
                 fail(10, "unsupported_protocol_or_platform")
             }
@@ -1541,8 +1544,9 @@ pub fn run(path: &Path) -> Result<()> {
             #[cfg(windows)] tokio::signal::ctrl_c().await.map_err(storage_error)?;
             let _=tx.send(true);Ok::<(),Failure>(())
         };
+        // The transport owns the single 30-second drain deadline on every platform.
         let runtime=provisioning::run(path,rx);tokio::pin!(runtime);
-        tokio::select!{r=&mut runtime=>r.map_err(provision_error),s=stop=>{s?;tokio::time::timeout(std::time::Duration::from_secs(30),runtime).await.map_err(|_|fail(9,"shutdown_result_uncertain"))?.map_err(provision_error)}}
+        tokio::select!{r=&mut runtime=>r.map_err(provision_error),s=stop=>{s?;runtime.await.map_err(provision_error)}}
     })
 }
 

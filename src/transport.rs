@@ -76,6 +76,8 @@ pub enum TransportError {
     Protocol,
     #[error("runtime diagnostics unavailable")]
     Diagnostics,
+    #[error("Client shutdown left an execution outcome uncertain")]
+    ShutdownIncomplete,
 }
 
 #[derive(Clone, Default)]
@@ -175,12 +177,12 @@ impl ManagerConnection {
             .map_err(|_| TransportError::Configuration)?;
         loop {
             if *shutdown.borrow() {
-                return Ok(());
+                return execution.shutdown().await;
             }
             let started = Instant::now();
             let result = tokio::select! {
                 biased;
-                _ = shutdown.changed() => return Ok(()),
+                _ = shutdown.changed() => return execution.shutdown().await,
                 result = self.session(&binding, &capabilities, executor.clone(), &health, &mut execution) => result,
             };
             crate::runtime_status::observe("manager_session", serde_json::json!("disconnected"));
@@ -214,7 +216,7 @@ impl ManagerConnection {
                 .next_delay()
                 .map_err(|_| TransportError::Configuration)?;
             tokio::select! {
-                _ = shutdown.changed() => return Ok(()),
+                _ = shutdown.changed() => return execution.shutdown().await,
                 _ = tokio::time::sleep(delay) => {},
             }
         }
@@ -374,6 +376,50 @@ struct ExecutionState {
     mutation_completed: Option<Instant>,
     acknowledging: FuturesUnordered<tokio::task::JoinHandle<ReceiptCompletion>>,
 }
+impl ExecutionState {
+    async fn shutdown(&mut self) -> Result<(), TransportError> {
+        // Stop receiving tasks first, then let the already-owned execution and
+        // receipts reach their existing journal commits. Never replay an effect.
+        let completed = timeout(Duration::from_secs(30), async {
+            if let Some(active) = self.active.as_mut() {
+                let result = (&mut active.handle).await;
+                self.active = None;
+                let report = result.map_err(|_| TransportError::ShutdownIncomplete)?;
+                if matches!(
+                    report,
+                    Report::Unknown {
+                        reason: xscs_protocol::Uncertainty::PersistenceFailure
+                    }
+                ) {
+                    return Err(TransportError::ShutdownIncomplete);
+                }
+            }
+            while let Some(receipt) = self.acknowledging.next().await {
+                receipt
+                    .map_err(|_| TransportError::ShutdownIncomplete)?
+                    .2
+                    .map_err(|_| TransportError::ShutdownIncomplete)?;
+            }
+            Ok(())
+        })
+        .await
+        .unwrap_or(Err(TransportError::ShutdownIncomplete));
+        if completed.is_err() {
+            // Intent already saved by the executor remains available for later
+            // inspection. Cancellation must not be reported as clean shutdown.
+            if let Some(active) = self.active.take() {
+                active.handle.abort();
+                let _ = active.handle.await;
+            }
+            for receipt in self.acknowledging.iter() {
+                receipt.abort();
+            }
+            while self.acknowledging.next().await.is_some() {}
+        }
+        completed
+    }
+}
+
 struct ActiveExecution {
     id: String,
     fingerprint: String,
@@ -430,6 +476,56 @@ fn classify_handshake(error: tungstenite::Error) -> TransportError {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    fn executing(handle: tokio::task::JoinHandle<Report>) -> ExecutionState {
+        ExecutionState {
+            active: Some(ActiveExecution {
+                id: "shutdown-test".into(),
+                fingerprint: "shutdown-test".into(),
+                mutation: true,
+                handle,
+            }),
+            ..Default::default()
+        }
+    }
+
+    #[tokio::test]
+    async fn shutdown_waits_for_owned_execution() {
+        let (completed, mut observed) = tokio::sync::oneshot::channel();
+        let mut execution = executing(tokio::spawn(async move {
+            tokio::task::yield_now().await;
+            completed.send(()).unwrap();
+            Report::Unknown {
+                reason: xscs_protocol::Uncertainty::EffectNotConfirmed,
+            }
+        }));
+        assert_eq!(execution.shutdown().await, Ok(()));
+        assert_eq!(observed.try_recv(), Ok(()));
+        assert!(execution.active.is_none());
+    }
+
+    #[tokio::test]
+    async fn shutdown_reports_execution_persistence_failure() {
+        let mut execution = executing(tokio::spawn(async {
+            Report::Unknown {
+                reason: xscs_protocol::Uncertainty::PersistenceFailure,
+            }
+        }));
+        assert_eq!(
+            execution.shutdown().await,
+            Err(TransportError::ShutdownIncomplete)
+        );
+    }
+
+    #[tokio::test]
+    async fn shutdown_preserves_business_uncertainty() {
+        let mut execution = executing(tokio::spawn(async {
+            Report::Unknown {
+                reason: xscs_protocol::Uncertainty::EffectNotConfirmed,
+            }
+        }));
+        assert_eq!(execution.shutdown().await, Ok(()));
+    }
 
     #[test]
     fn handshake_distinguishes_manager_authentication_from_proxy_failures() {
