@@ -14,7 +14,55 @@ concurrency:
   cancel-in-progress: true
 
 jobs:
+  # Keep PR workflows and existing check names present; filter jobs, not triggers.
+  scope:
+    name: Change scope
+    permissions:
+      contents: read
+    runs-on: ubuntu-24.04
+    timeout-minutes: 5
+    outputs:
+      run_full: ${{ steps.changes.outputs.run_full }}
+    steps:
+      - name: Check out the comparison history
+        uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          fetch-depth: 0
+          persist-credentials: false
+      - name: Select documentation or full validation
+        id: changes
+        shell: bash
+        env:
+          PUSH_BASE: ${{ github.event.before }}
+          PR_BASE: ${{ github.event.pull_request.base.sha }}
+        run: |
+          set -euo pipefail
+          run_full=true
+          base=""
+          if [[ "$GITHUB_EVENT_NAME" == pull_request ]]; then
+            base="$PR_BASE"
+          elif [[ "$GITHUB_EVENT_NAME" == push && "$GITHUB_REF_TYPE" != tag ]]; then
+            base="$PUSH_BASE"
+          fi
+          # Dispatches, release tags, new branches and unavailable history stay full.
+          if [[ "$base" =~ ^[0-9a-f]{40}$ ]] && git cat-file -e "${base}^{commit}" 2>/dev/null; then
+            git diff --name-only --no-renames -z "$base" HEAD > "$RUNNER_TEMP/changed-paths"
+            run_full=false
+            while IFS= read -r -d '' path; do
+              case "$path" in
+                # Release/package inputs and safety audits retain full validation.
+                docs/releases/* | docs/unsafe*.md | README.md | docs/platform-setup.md) run_full=true; break ;;
+                README.md | docs/*.md) ;;
+                *) run_full=true; break ;;
+              esac
+            done < "$RUNNER_TEMP/changed-paths"
+          fi
+          echo "run_full=$run_full" >> "$GITHUB_OUTPUT"
+          echo "Full validation: $run_full"
+
   client-linux-package:
+    needs: scope
+    if: ${{ !cancelled() && needs.scope.outputs.run_full != 'false' }}
     permissions:
       contents: read
     runs-on: ubuntu-24.04
@@ -66,6 +114,8 @@ jobs:
           path: ${{ runner.temp }}/client-output/*
           if-no-files-found: error
   client-windows-package:
+    needs: scope
+    if: ${{ !cancelled() && needs.scope.outputs.run_full != 'false' }}
     permissions:
       contents: read
     runs-on: windows-2025
@@ -155,6 +205,8 @@ jobs:
           if-no-files-found: error
 
   client-macos-arm64:
+    needs: scope
+    if: ${{ !cancelled() && needs.scope.outputs.run_full != 'false' }}
     permissions:
       contents: read
     runs-on: macos-15
