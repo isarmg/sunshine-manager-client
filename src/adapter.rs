@@ -179,7 +179,15 @@ impl Configuration {
             if remove.contains(key) {
                 return Err(AdapterError::UnsafeConfiguration);
             }
-            merged.fields.insert(key.clone(), value.sunshine_text());
+            // VideoToolbox's realtime parser only accepts disabled/off/0 as false.
+            // The generic boolean spelling "false" is otherwise interpreted as enabled.
+            let text = match (key.as_str(), value) {
+                ("vt_realtime", xscs_protocol::config::FieldValue::Boolean(value)) => {
+                    if *value { "enabled" } else { "disabled" }.to_owned()
+                }
+                _ => value.sunshine_text(),
+            };
+            merged.fields.insert(key.clone(), text);
         }
         for key in remove {
             if !xscs_protocol::config::contains_field(key) {
@@ -1527,5 +1535,59 @@ mod service_command_tests {
         let result = service_command_output(command, Duration::from_millis(25)).await;
         assert_eq!(result.unwrap_err(), AdapterError::ApiUnavailable);
         assert!(started.elapsed() < Duration::from_secs(2));
+    }
+}
+
+#[cfg(test)]
+mod configuration_encoding_tests {
+    use super::*;
+    use xscs_protocol::config::FieldValue;
+    #[test]
+    fn disabling_videotoolbox_realtime_matches_supported_upstream_parser() {
+        let initial = Configuration::from_response(json!({"status":true,"version":xscs_protocol::SUNSHINE_VERSION,"platform":"macos","vt_realtime":"disabled","qp":"28"})).unwrap();
+        let set = BTreeMap::from([
+            ("vt_realtime".into(), FieldValue::Boolean(false)),
+            ("qp".into(), FieldValue::Integer(29)),
+        ]);
+        let saved = initial.merge(&set, &Default::default()).unwrap();
+        let body: Value = serde_json::from_slice(&saved.encoded().unwrap()).unwrap();
+        let realtime = body["vt_realtime"].as_str().unwrap();
+        // Exact accepted false spellings in supported Sunshine config.cpp vt::rt_from_view.
+        assert!(
+            matches!(realtime, "disabled" | "off" | "0"),
+            "serialized {realtime:?} re-enables realtime upstream"
+        );
+        assert_eq!(
+            saved.snapshot(Effectiveness::PendingVerification).fields["vt_realtime"],
+            "false"
+        );
+    }
+    #[test]
+    fn realtime_enabled_and_other_boolean_serialization_are_preserved() {
+        let initial = Configuration::from_response(json!({"status":true,"version":xscs_protocol::SUNSHINE_VERSION,"platform":"macos","vt_realtime":"disabled"})).unwrap();
+        let saved = initial
+            .merge(
+                &BTreeMap::from([
+                    ("vt_realtime".into(), FieldValue::Boolean(true)),
+                    ("stream_audio".into(), FieldValue::Boolean(false)),
+                ]),
+                &Default::default(),
+            )
+            .unwrap();
+        let body: Value = serde_json::from_slice(&saved.encoded().unwrap()).unwrap();
+        assert_eq!(body["vt_realtime"], "enabled");
+        assert_eq!(body["stream_audio"], "false");
+        assert_eq!(
+            saved.snapshot(Effectiveness::PendingVerification).fields["vt_realtime"],
+            "true"
+        );
+        let untouched = initial
+            .merge(
+                &BTreeMap::from([("qp".into(), FieldValue::Integer(29))]),
+                &Default::default(),
+            )
+            .unwrap();
+        let body: Value = serde_json::from_slice(&untouched.encoded().unwrap()).unwrap();
+        assert_eq!(body["vt_realtime"], "disabled");
     }
 }

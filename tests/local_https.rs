@@ -1243,3 +1243,86 @@ async fn post_write_application_readback_conflict_remains_unknown_and_is_not_rep
         }));
     }
 }
+
+#[tokio::test]
+#[ignore = "requires loopback sockets and openssl"]
+async fn realtime_false_save_uses_sunshine_disabled_spelling() {
+    let temporary = tempfile::tempdir().unwrap();
+    certificates(temporary.path());
+    let before = serde_json::json!({"status":true,"version":SUNSHINE_VERSION,"platform":"macos","vt_realtime":"disabled","qp":"28"});
+    let after = serde_json::json!({"status":true,"version":SUNSHINE_VERSION,"platform":"macos","vt_realtime":"disabled","qp":"29"});
+    let fixture = serve(
+        temporary.path(),
+        vec![
+            response(before),
+            response(serde_json::json!({"status":true})),
+            response(after),
+        ],
+    )
+    .await;
+    let binding = Binding {
+        manager_id: uuid::Uuid::from_u128(1),
+        device_id: uuid::Uuid::from_u128(2),
+        installation_id: uuid::Uuid::from_u128(3),
+    };
+    let task = Task {
+        protocol: TASK_PROTOCOL.into(),
+        operation_id: format!("op_{}", uuid::Uuid::new_v4()),
+        binding: binding.clone(),
+        permission: Permission::WriteConfig,
+        command: Command::SaveConfig {
+            set: std::collections::BTreeMap::from([
+                ("vt_realtime".into(), config::FieldValue::Boolean(false)),
+                ("qp".into(), config::FieldValue::Integer(29)),
+            ]),
+            remove: config::FIELD_DEFINITIONS
+                .iter()
+                .filter(|field| {
+                    field.operating_systems.contains(&"macos_aarch64")
+                        && !matches!(field.key, "vt_realtime" | "qp")
+                })
+                .map(|field| field.key.to_owned())
+                .collect(),
+            restart_policy: RestartPolicy::Manual,
+        },
+    };
+    let capabilities = Capabilities {
+        protocol: PROTOCOL.into(),
+        client_version: "test".into(),
+        os: ClientOs::MacosAarch64,
+        sunshine_version: SUNSHINE_VERSION.into(),
+        configuration_overwrite: true,
+        pending_pairing_listing: false,
+        restart_allowed: false,
+        managed_fields: config::FIELD_DEFINITIONS
+            .iter()
+            .map(|field| field.key.to_owned())
+            .collect(),
+        application_management: false,
+        application_host_commands_allowed: false,
+        moonlight_pairing_management: false,
+        diagnostics: false,
+        maintenance: false,
+        service_control: false,
+    };
+    let executor = Executor::new_with_capabilities(
+        binding,
+        capabilities,
+        adapter(&fixture),
+        JournalFixture::default(),
+    );
+    let result = executor.deliver(&task, DeliveryMode::Execute).await;
+    {
+        let requests = fixture.requests.lock().unwrap();
+        assert_eq!(requests.len(), 3);
+        let saved = String::from_utf8_lossy(&requests[1]);
+        assert!(saved.starts_with("POST /api/config "));
+        let body: serde_json::Value =
+            serde_json::from_str(saved.split_once("\r\n\r\n").unwrap().1).unwrap();
+        assert_eq!(body["vt_realtime"], "disabled");
+        assert_eq!(body["qp"], "29");
+    }
+    assert!(matches!(result, Report::ConfigSaved { .. }), "{result:?}");
+    assert_eq!(result, executor.deliver(&task, DeliveryMode::Execute).await);
+    assert_eq!(fixture.requests.lock().unwrap().len(), 3);
+}
