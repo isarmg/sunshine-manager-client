@@ -1,32 +1,8 @@
-# xscc 配置指南
+# 配置 xscc
 
-首次部署或日常维护请先阅读[分平台全流程指南](platform-setup.md)：按本机平台完成安装、配对、重新配对、服务/后台任务查看与启停、诊断和卸载，命令旁均说明用途。本文详细说明配置字段和业务操作。
+首次部署直接使用[安装指南](platform-setup.md)的 `setup --interactive`；下面用于按步骤配置、审阅修改或自动化。修改配置、配对和凭据前先停止服务，验证后恢复运行。
 
-本文适用于 `xscc` `1.0.0`。客户端必须先连接本机 Sunshine，再与 xscs 配对；以下命令不会安装 Sunshine。
-
-## 命令用途与执行边界
-
-| 命令 | 用途与影响 |
-|---|---|
-| `version --format json` | 只读确认软件、平台及当前协议/账户版本 |
-| `config init [--interactive]` | 首次初始化本机 Sunshine 接口设置，不用于清理旧身份 |
-| `config show --format json` | 查看脱敏设置和 `stored_revision` |
-| `config edit` | 在编辑器中修改候选 Sunshine endpoint，经校验和修订检查后提交；先停服 |
-| `config validate --file PATH` | 仅校验候选，不应用它 |
-| `config diff --file PATH` | 比较候选与当前设置，供审阅 |
-| `config apply --file PATH --expected-revision REVISION` | 检查当前修订并提交候选，避免并发覆盖；先停服 |
-| `setup` | 完整配对/复用、服务策略、启动和连接验证，适合首次部署 |
-| `pair` / `pair status` / `pair resume` | 分别执行单独配对、查看事务、恢复已开始事务 |
-| `pair replace` | 用新管理端授权替换绑定，保留本机安装身份和执行记录 |
-| `credentials update` | 更新本机 Sunshine 用户名/密码，保留管理端绑定；先停服 |
-| `status --check` | 查看客户端业务与连接检查，不能代替只读任务往返验收 |
-| `doctor --network` | 检查远程管理端入口，不能证明 Sunshine 本机认证可用 |
-| `doctor --sunshine` | 真实访问本机 Sunshine API，检查版本与凭据 |
-| `tasks list` / `tasks show OPERATION_ID` | 查看任务列表/单项持久执行记录，不重新执行任务 |
-| `logs --tail 100` | 读取最近日志，不改变服务运行状态 |
-
-`--config` 指向整个状态目录，`--file` 指向实际候选文件，`REVISION` 从最新 `config show` 复制。`--interactive` 通过受保护终端输入，`--input-stdin` 从受保护 stdin 读严格 JSON；`--non-interactive` 禁止额外提示，`--timeout` 限定等待，`--format json` 提供结构化结果。系统服务操作必须使用默认状态目录。
-
+命令总表见[命令参考](cli-compatibility.md)。所有 `REPLACE_...`、`COPY_STORED_REVISION_HERE` 和 `CURRENT_HOST_UUID` 都要替换为实际值。秘密输入放在受保护文件或交互提示中。
 
 ## 1. 前置条件与状态目录
 
@@ -62,8 +38,6 @@ $Client = Join-Path $InstallRoot 'xscc.exe'
 使用默认 Sunshine 地址初始化，或交互输入另一个回环 HTTPS 端口：
 
 ```sh
-sudo xscc config init
-# 或
 sudo xscc config init --interactive
 sudo xscc config show --format json
 ```
@@ -118,7 +92,7 @@ sudo install -m 0600 /dev/null /root/sunshine-bootstrap.json
 sudoedit /root/sunshine-bootstrap.json
 sudo sh -c 'exec xscc pair --input-stdin --non-interactive --format json < /root/sunshine-bootstrap.json'
 sudo xscc pair status --format json
-sudo shred -u /root/sunshine-bootstrap.json
+sudo rm -f /root/sunshine-bootstrap.json
 ```
 
 有人值守时也可运行完整向导：
@@ -127,9 +101,7 @@ sudo shred -u /root/sunshine-bootstrap.json
 sudo xscc setup --interactive
 ```
 
-首次配对和 `pair replace --interactive` 的管理端实例授权码都使用 `Authorization code (visible)` 普通
-文本提示，输入或粘贴内容会在终端中明文回显，不提供遮罩、隐藏切换或特殊显示流程。本机 Sunshine 密码
-仍使用隐藏输入。CLI 不会把两者写入日志、结果 JSON 或命令参数。
+实例授权码在交互终端明文回显，Sunshine 密码隐藏输入；自动化使用受保护 stdin。
 
 `setup` 仅询问是否开机自启，默认 Yes，直接按 Enter 即可；完成配对后固定启动后台服务并验证连接。
 当前平台支持的管理功能全部启用，没有重启、应用、配对、诊断或维护权限开关。
@@ -138,7 +110,7 @@ sudo xscc setup --interactive
 
 ```sh
 sudo xscc pair status --format json
-sudo xscc pair resume --interactive
+sudo xscc pair resume
 ```
 
 ## 4. 更新 Sunshine 凭据
@@ -165,7 +137,7 @@ sudo xscc service start
 sudo install -m 0600 /dev/null /root/sunshine-credentials.json
 sudoedit /root/sunshine-credentials.json
 sudo sh -c 'exec xscc credentials update --input-stdin --non-interactive --format json < /root/sunshine-credentials.json'
-sudo shred -u /root/sunshine-credentials.json
+sudo rm -f /root/sunshine-credentials.json
 ```
 
 此操作保留管理端绑定、installation ID 和任务记录。
@@ -183,8 +155,6 @@ sudo xscc service start
 
 `pair replace` 保留本机安装身份和执行记录。切换到另一台管理端前，应先在旧管理端退役设备并按运维策略归档状态。
 
-若旧版本账户文档返回 `pairing_state_incompatible`，使用同一条 `pair replace` 命令。客户端会在确认执行日志完整后归档旧账户文档并创建当前身份；如果执行日志不兼容或不可读，则返回 `important_state_incompatible`，不会删除、改写或绕过这些重要记录。
-
 ## 6. 启动和验证
 
 完整 `setup` 已自动启动并验证服务。以下命令用于后续查看或显式恢复已停用的服务：
@@ -193,10 +163,10 @@ sudo xscc service start
 sudo xscc service enable
 sudo xscc service start
 sudo xscc service status --format json
-xscc status --check --format json
-xscc doctor --network --format json
-xscc doctor --sunshine --format json
-xscc tasks list --format json
+sudo xscc status --check --format json
+sudo xscc doctor --network --format json
+sudo xscc doctor --sunshine --format json
+sudo xscc tasks list --format json
 ```
 
 `doctor --network` 检查管理端网络入口；`doctor --sunshine` 会真实访问本机 Sunshine API 并验证版本和凭据。最后在管理端管理页确认设备在线，再执行一个只读任务验证完整链路。
@@ -206,17 +176,6 @@ xscc tasks list --format json
 查看某项本地执行记录：
 
 ```sh
-xscc tasks show op_REPLACE_WITH_OPERATION_UUID --format json
-xscc logs --tail 100
+sudo xscc tasks show op_REPLACE_WITH_OPERATION_UUID --format json
+sudo xscc logs --tail 100
 ```
-
-## 7. 安全注意事项
-
-- 管理端连接始终校验系统信任链和域名；先修复证书，不要关闭校验。
-- 本机 Sunshine 连接被限制为 HTTPS 回环连接；客户端不校验其自签名证书身份，但每次请求仍校验用户名和密码。
-- 授权码通过受保护终端的明文回显提示或 stdin 输入；Sunshine 密码通过隐藏提示或 stdin 输入。两者都不放入参数、环境变量、日志和版本库。
-- 配置、配对和凭据写入前停止服务；成功验证后再启动。
-
-## 运行日志
-
-管理端连接、断开、授权拒绝和协议失败使用 xcsc 内部 `xcsc::log` 实现输出 UTC JSON 行到 stderr，事件为 `xscc.session.*`。每条带设备 UUID 的 `instance_id` 和稳定失败 `error_code`；不输出凭据、管理端 endpoint 或任意内部错误链。诊断写入失败返回 `diagnostics_unavailable` 并停止运行，由平台服务宿主报告。

@@ -56,3 +56,7 @@ python3 scripts/package-client.py --output "$HOME/xscc-output"
 `setup --interactive` / `pair --interactive` 的实例授权码为明文输入；Sunshine 密码使用隐藏输入。两者不写入日志或命令参数。不要自行把凭据加入 Shell 历史、脚本或日志；任务或账户异常时遵循平台指南保全执行事实。
 
 公共接口与平台边界见[公共支撑](common-support.md)。代码采用 [Apache License 2.0](../LICENSE-APACHE)。
+
+## 编辑文档
+
+面向使用者按安装、配置、正常使用、维护和排障组织内容；完整字段与输出集中在参考页。示例写明平台和权限，预期结果紧跟操作，秘密与数据清理提示放在对应步骤。参照 [GNU 手册建议](https://www.gnu.org/prep/standards/html_node/GNU-Manuals.html)。检查链接和命令后，运行受影响的安装包文档检查。
