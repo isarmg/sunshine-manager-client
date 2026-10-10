@@ -673,6 +673,19 @@ fn applications_from_bytes(bytes: &[u8]) -> Result<ApplicationsSnapshot, Adapter
     })
 }
 
+/// Do not write an application list that this adapter cannot subsequently identify.
+pub(crate) fn application_save_conflicts(
+    current: &ApplicationsSnapshot,
+    target: Option<&ApplicationRef>,
+    fingerprint: &str,
+) -> bool {
+    (target.is_none() && current.applications.len() >= 256)
+        || current
+            .applications
+            .iter()
+            .any(|app| app.reference.fingerprint == fingerprint && Some(&app.reference) != target)
+}
+
 fn paired_clients_from_value(value: Value) -> Result<PairedClientsSnapshot, AdapterError> {
     let values = value
         .get("named_certs")
@@ -1059,6 +1072,11 @@ impl Sunshine for LocalSunshine {
     ) -> Result<ApplicationsSnapshot, AdapterError> {
         let current = self.applications().await?;
         if current.revision != expected {
+            return Err(AdapterError::ResourceConflict);
+        }
+        let reference = xscs_protocol::application_reference(application)
+            .map_err(|_| AdapterError::UnsafeConfiguration)?;
+        if application_save_conflicts(&current, target, &reference.fingerprint) {
             return Err(AdapterError::ResourceConflict);
         }
         let index = match target {

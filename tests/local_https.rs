@@ -1067,3 +1067,32 @@ async fn diagnostics_distinguishes_unsupported_version_from_connection_and_crede
         }
     }
 }
+
+#[tokio::test]
+async fn application_duplicate_save_is_refused_without_posting_to_sunshine() {
+    let temporary = tempfile::tempdir().unwrap();
+    certificates(temporary.path());
+    let original = serde_json::json!({"apps": [{"name": "Desktop"}, {"name": "Other desktop"}]});
+    let fixture = serve(temporary.path(), vec![response(original.clone()); 3]).await;
+    let mut sunshine = adapter(&fixture);
+    let current = sunshine.applications().await.unwrap();
+    for target in [None, Some(&current.applications[1].reference)] {
+        assert_eq!(
+            sunshine
+                .save_application(
+                    &current.revision,
+                    target,
+                    &current.applications[0].specification
+                )
+                .await,
+            Err(AdapterError::ResourceConflict)
+        );
+    }
+    let requests = fixture.requests.lock().unwrap();
+    assert_eq!(requests.len(), 3);
+    assert!(
+        requests
+            .iter()
+            .all(|request| request.starts_with(b"GET /api/apps "))
+    );
+}

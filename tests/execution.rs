@@ -803,3 +803,225 @@ async fn uncertain_intent_is_retained_until_a_final_manager_resolution() {
         }
     );
 }
+
+#[derive(Clone)]
+struct ApplicationFixture(Arc<Mutex<(Vec<ApplicationView>, usize)>>);
+
+#[async_trait]
+impl Sunshine for ApplicationFixture {
+    async fn read(&mut self) -> Result<Configuration, AdapterError> {
+        Ok(configuration("28"))
+    }
+    async fn save(&mut self, _: &Configuration) -> Result<(), AdapterError> {
+        unreachable!()
+    }
+    async fn restart(&mut self) -> Result<(), AdapterError> {
+        unreachable!()
+    }
+    async fn applications(&mut self) -> Result<ApplicationsSnapshot, AdapterError> {
+        let state = self.0.lock().unwrap();
+        let mut references = std::collections::BTreeSet::new();
+        if state.0.len() > 256
+            || state
+                .0
+                .iter()
+                .any(|app| !references.insert(&app.reference.fingerprint))
+        {
+            return Err(AdapterError::ResourceConflict);
+        }
+        Ok(ApplicationsSnapshot {
+            revision: "a".repeat(64),
+            applications: state.0.clone(),
+        })
+    }
+    async fn save_application(
+        &mut self,
+        _: &str,
+        target: Option<&ApplicationRef>,
+        application: &ApplicationSpec,
+    ) -> Result<ApplicationsSnapshot, AdapterError> {
+        {
+            let mut state = self.0.lock().unwrap();
+            state.1 += 1;
+            let view = ApplicationView {
+                reference: application_reference(application).unwrap(),
+                specification: application.clone(),
+            };
+            if let Some(target) = target {
+                let index = state
+                    .0
+                    .iter()
+                    .position(|app| app.reference == *target)
+                    .unwrap();
+                state.0[index] = view;
+            } else {
+                state.0.push(view);
+            }
+        }
+        self.applications().await
+    }
+}
+
+fn application_fixture(count: usize) -> ApplicationFixture {
+    ApplicationFixture(Arc::new(Mutex::new((
+        (0..count)
+            .map(|index| {
+                let specification: ApplicationSpec =
+                    serde_json::from_value(json!({"name": format!("Application {index}")}))
+                        .unwrap();
+                ApplicationView {
+                    reference: application_reference(&specification).unwrap(),
+                    specification,
+                }
+            })
+            .collect(),
+        0,
+    ))))
+}
+
+#[tokio::test]
+async fn application_saves_reject_duplicate_content_before_mutation_and_remain_usable() {
+    for replace in [false, true] {
+        let mut sunshine = application_fixture(2);
+        let current = sunshine.applications().await.unwrap();
+        let mut task = patch();
+        task.permission = Permission::ManageApplications;
+        task.command = Command::SaveApplication {
+            expected_revision: current.revision,
+            target: replace.then(|| current.applications[1].reference.clone()),
+            application: current.applications[0].specification.clone(),
+            administrator_confirmed_host_commands: false,
+        };
+        let executor = Executor::new(binding(), sunshine.clone(), MemoryJournal::default());
+        let report = executor.deliver(&task, DeliveryMode::Execute).await;
+        assert_eq!(
+            report,
+            Report::Rejected {
+                reason: Rejection::ResourceConflict
+            }
+        );
+        validate_report(&task.command, &report).unwrap();
+        assert_eq!(sunshine.0.lock().unwrap().1, 0);
+        assert_eq!(sunshine.applications().await.unwrap().applications.len(), 2);
+        assert_eq!(executor.deliver(&task, DeliveryMode::Execute).await, report);
+    }
+}
+
+#[tokio::test]
+async fn application_capacity_rejects_creation_without_mutation() {
+    let mut sunshine = application_fixture(256);
+    let current = sunshine.applications().await.unwrap();
+    let mut application = current.applications[0].specification.clone();
+    application.name = "New at capacity".into();
+    let mut task = patch();
+    task.permission = Permission::ManageApplications;
+    task.command = Command::SaveApplication {
+        expected_revision: current.revision,
+        target: None,
+        application,
+        administrator_confirmed_host_commands: false,
+    };
+    let executor = Executor::new(binding(), sunshine.clone(), MemoryJournal::default());
+    assert_eq!(
+        executor.deliver(&task, DeliveryMode::Execute).await,
+        Report::Rejected {
+            reason: Rejection::ResourceConflict
+        }
+    );
+    assert_eq!(sunshine.0.lock().unwrap().1, 0);
+    assert_eq!(
+        sunshine.applications().await.unwrap().applications.len(),
+        256
+    );
+}
+
+#[tokio::test]
+async fn application_save_to_its_own_reference_remains_allowed() {
+    let mut sunshine = application_fixture(2);
+    let current = sunshine.applications().await.unwrap();
+    let mut task = patch();
+    task.permission = Permission::ManageApplications;
+    task.command = Command::SaveApplication {
+        expected_revision: current.revision,
+        target: Some(current.applications[0].reference.clone()),
+        application: current.applications[0].specification.clone(),
+        administrator_confirmed_host_commands: false,
+    };
+    let executor = Executor::new(binding(), sunshine.clone(), MemoryJournal::default());
+    let report = executor.deliver(&task, DeliveryMode::Execute).await;
+    assert!(
+        matches!(report, Report::ApplicationSaved { .. }),
+        "{report:?}"
+    );
+    validate_report(&task.command, &report).unwrap();
+    assert_eq!(sunshine.0.lock().unwrap().1, 1);
+}
+
+#[tokio::test]
+async fn application_save_rejects_unreportable_result_before_mutation() {
+    // A populated game library using ordinary Steam commands and cover paths.
+    // Find the exact one-application boundary using the protocol serializer.
+    let mut applications = Vec::new();
+    let application = loop {
+        let index = applications.len();
+        assert!(index < 256);
+        let specification: ApplicationSpec = serde_json::from_value(json!({
+            "name": format!("Library game {index}"),
+            "cmd": format!(r#""C:\Program Files (x86)\Steam\steam.exe" -applaunch {}"#, 100000 + index),
+            "working-dir": r"C:\Program Files (x86)\Steam",
+            "image-path": format!(r"C:\Program Files\Sunshine\assets\covers\library-game-{index}.png"),
+            "auto-detach": true,
+            "wait-all": true,
+        })).unwrap();
+        applications.push(ApplicationView {
+            reference: application_reference(&specification).unwrap(),
+            specification: specification.clone(),
+        });
+        let predicted = Report::ApplicationSaved {
+            snapshot: ApplicationsSnapshot {
+                revision: "a".repeat(64),
+                applications: applications.clone(),
+            },
+        };
+        let bytes = serde_json::to_vec(&predicted).unwrap().len();
+        if bytes > MAX_REPORT_BYTES {
+            applications.pop();
+            println!(
+                "before: {} games; attempted result: {bytes} bytes; report budget: {MAX_REPORT_BYTES} bytes",
+                applications.len()
+            );
+            break specification;
+        }
+    };
+    let mut sunshine = ApplicationFixture(Arc::new(Mutex::new((applications, 0))));
+    let current = sunshine.applications().await.unwrap();
+    validate_report(
+        &Command::ListApplications {},
+        &Report::ApplicationsRead {
+            snapshot: current.clone(),
+        },
+    )
+    .unwrap();
+    let mut task = patch();
+    task.permission = Permission::ManageApplications;
+    task.command = Command::SaveApplication {
+        expected_revision: current.revision,
+        target: None,
+        application,
+        administrator_confirmed_host_commands: true,
+    };
+    let executor = Executor::new(binding(), sunshine.clone(), MemoryJournal::default());
+    let report = executor.deliver(&task, DeliveryMode::Execute).await;
+    assert_eq!(
+        report,
+        Report::Rejected {
+            reason: Rejection::ResultTooLarge
+        }
+    );
+    validate_report(&task.command, &report).unwrap();
+    assert_eq!(sunshine.0.lock().unwrap().1, 0);
+    let readable = Report::ApplicationsRead {
+        snapshot: sunshine.applications().await.unwrap(),
+    };
+    validate_report(&Command::ListApplications {}, &readable).unwrap();
+}

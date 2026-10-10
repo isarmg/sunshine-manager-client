@@ -7,7 +7,7 @@ license = "Apache-2.0"
 publish = false
 
 [dependencies]
-xcsc = { git = "https://github.com/isarmg/xcsc.git", rev = "c45e48e93e360542c2e1db6c6441a9e29b344b03", version = "=1.0.0" }
+xcsc = { git = "https://github.com/isarmg/xcsc.git", rev = "d3e9b8db84e4ead70ec0bf8a596dbad697f7db24", version = "=1.0.1" }
 async-trait = "0.1"
 base64 = "0.23"
 futures-util = { version = "0.3", features = ["sink"] }

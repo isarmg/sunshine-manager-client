@@ -484,6 +484,45 @@ impl<A: Sunshine, J: Journal> Inner<A, J> {
                         );
                     }
                 };
+                if crate::adapter::application_save_conflicts(
+                    &current,
+                    target.as_ref(),
+                    &target_reference,
+                ) {
+                    return self.finish(
+                        &task.operation_id,
+                        record,
+                        Report::Rejected {
+                            reason: Rejection::ResourceConflict,
+                        },
+                    );
+                }
+                // Reject a predictably unreadable result before changing Sunshine.
+                // References and revisions have fixed widths, and sorting does not
+                // change the serialized report size.
+                let mut predicted = current.clone();
+                predicted
+                    .applications
+                    .retain(|app| Some(&app.reference) != target.as_ref());
+                predicted.applications.push(xscs_protocol::ApplicationView {
+                    reference: xscs_protocol::ApplicationRef {
+                        fingerprint: target_reference.clone(),
+                    },
+                    specification: application.clone(),
+                });
+                if serde_json::to_vec(&Report::ApplicationSaved {
+                    snapshot: predicted,
+                })
+                .map_or(true, |bytes| bytes.len() > xscs_protocol::MAX_REPORT_BYTES)
+                {
+                    return self.finish(
+                        &task.operation_id,
+                        record,
+                        Report::Rejected {
+                            reason: Rejection::ResultTooLarge,
+                        },
+                    );
+                }
                 if !self.remember(
                     &task.operation_id,
                     record,
