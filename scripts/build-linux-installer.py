@@ -24,6 +24,11 @@ def main():
         stage.chmod(0o755)
         for directory in ['DEBIAN', 'opt/xscc', 'usr/bin', 'usr/lib/systemd/system', 'usr/share/doc/xscc']:
             (stage / directory).mkdir(parents=True)
+        # Directory modes are part of the installed layout, not the caller's
+        # umask. Debian also requires its control directory to be traversable.
+        for directory in stage.rglob('*'):
+            if directory.is_dir():
+                directory.chmod(0o755)
         shutil.copy2(args.binary, stage / 'opt/xscc/xscc')
         (stage / 'usr/bin/xscc').symlink_to('/opt/xscc/xscc')
         shutil.copy2(ROOT / 'deploy/xscc.service', stage / 'usr/lib/systemd/system/xscc.service')

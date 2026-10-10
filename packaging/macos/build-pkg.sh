@@ -1,5 +1,7 @@
 #!/bin/sh
 set -eu
+# Package payload directories must stay traversable by the service account.
+umask 022
 
 if [ "$#" -ne 3 ]; then
   echo 'Usage: build-pkg.sh ABSOLUTE_BINARY VERSION ABSOLUTE_OUTPUT' >&2
