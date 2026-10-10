@@ -17,29 +17,13 @@ cargo test --locked --test local_https -- --ignored --skip authenticated_wss_del
 
 HTTPS 测试使用本地协议夹具；真实管理端的标准信任链 WSS 联调须单独配置测试证书。发行须对最终受控依赖源码执行各平台原生 CI；本地测试不能替代原生安装、Sunshine 和端到端验收。
 
-## 原生打包
+## 按平台构建
 
-通用入口从本机平台构建 release 二进制、原生安装器、归档、manifest 和校验文件。源码须干净且已提交，输出为仓库外尚不存在的绝对目录。
+原生依赖、命令和输出路径见对应平台页：
 
-Ubuntu 24.04 x86_64 需 `dpkg-deb`：
-
-```sh
-python3 scripts/package-client.py --output "$HOME/xscc-output"
-```
-
-Windows x64 需 MSVC、.NET SDK（WiX `4.0.6` 由项目固定），在 PowerShell 执行：
-
-```powershell
-python scripts/package-client.py --output "$env:USERPROFILE\xscc-output"
-```
-
-macOS 需 Apple Silicon、Xcode 命令行工具和系统 `pkgbuild`/`productbuild`：
-
-```sh
-python3 scripts/package-client.py --output "$HOME/xscc-output"
-```
-
-正式标签构建再加 `--require-tag`，要求与版本号一致的 annotated tag 精确指向 HEAD。Windows/Linux/macOS 分别输出 MSI/DEB/未签名 PKG，安装后按[平台指南](platform-setup.md)完成设置。归档不是系统服务安装器；只包含可执行文件、文档与校验信息。
+- [Linux 原生包](platforms/linux.md#构建原生安装包)
+- [Windows MSI](platforms/windows.md#构建原生安装包)
+- [macOS PKG](platforms/macos.md#构建原生安装包)
 
 ## 仓库与通信边界
 
