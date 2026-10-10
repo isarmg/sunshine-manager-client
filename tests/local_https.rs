@@ -1096,3 +1096,150 @@ async fn application_duplicate_save_is_refused_without_posting_to_sunshine() {
             .all(|request| request.starts_with(b"GET /api/apps "))
     );
 }
+
+#[tokio::test]
+async fn pre_post_application_revision_conflict_is_terminal_without_mutation() {
+    for delete in [false, true] {
+        let temporary = tempfile::tempdir().unwrap();
+        certificates(temporary.path());
+        let original = serde_json::json!({"apps": [{"name": "Desktop"}]});
+        let changed =
+            serde_json::json!({"apps": [{"name": "Desktop"}, {"name": "Local editor addition"}]});
+        let fixture = serve(
+            temporary.path(),
+            vec![
+                response(original.clone()),
+                response(original),
+                response(changed.clone()),
+                response(changed),
+            ],
+        )
+        .await;
+        let mut sunshine = adapter(&fixture);
+        let snapshot = sunshine.applications().await.unwrap();
+        let binding = Binding {
+            manager_id: uuid::Uuid::from_u128(1),
+            device_id: uuid::Uuid::from_u128(2),
+            installation_id: uuid::Uuid::from_u128(3),
+        };
+        let command = if delete {
+            Command::DeleteApplication {
+                expected_revision: snapshot.revision,
+                target: snapshot.applications[0].reference.clone(),
+                administrator_confirmed: true,
+            }
+        } else {
+            let mut application = snapshot.applications[0].specification.clone();
+            application.name = "New desktop name".into();
+            Command::SaveApplication {
+                expected_revision: snapshot.revision,
+                target: Some(snapshot.applications[0].reference.clone()),
+                application,
+                administrator_confirmed_host_commands: false,
+            }
+        };
+        let task = Task {
+            protocol: TASK_PROTOCOL.into(),
+            operation_id: format!("op_{}", uuid::Uuid::new_v4()),
+            binding: binding.clone(),
+            permission: Permission::ManageApplications,
+            command,
+        };
+        let executor = Executor::new(binding, sunshine, JournalFixture::default());
+        let report = executor.deliver(&task, DeliveryMode::Execute).await;
+        validate_report(&task.command, &report).unwrap();
+        assert_eq!(executor.deliver(&task, DeliveryMode::Execute).await, report);
+        let requests = fixture.requests.lock().unwrap();
+        assert!(
+            requests
+                .iter()
+                .all(|request| request.starts_with(b"GET /api/apps "))
+        );
+        println!(
+            "delete={delete}, report={report:?}, methods=all GET ({} calls)",
+            requests.len()
+        );
+        assert_eq!(
+            report,
+            Report::Rejected {
+                reason: Rejection::ResourceConflict
+            }
+        );
+    }
+}
+
+#[tokio::test]
+async fn post_write_application_readback_conflict_remains_unknown_and_is_not_repeated() {
+    for delete in [false, true] {
+        let temporary = tempfile::tempdir().unwrap();
+        certificates(temporary.path());
+        let original = serde_json::json!({"apps": [{"name": "Desktop"}]});
+        let conflicting_readback =
+            serde_json::json!({"apps": [{"name": "Local desktop"}, {"name": "Local desktop"}]});
+        let fixture = serve(
+            temporary.path(),
+            vec![
+                response(original.clone()),
+                response(original.clone()),
+                response(original),
+                response(serde_json::json!({"status": true})),
+                response(conflicting_readback.clone()),
+                response(conflicting_readback.clone()),
+                response(conflicting_readback),
+            ],
+        )
+        .await;
+        let mut sunshine = adapter(&fixture);
+        let snapshot = sunshine.applications().await.unwrap();
+        let binding = Binding {
+            manager_id: uuid::Uuid::from_u128(1),
+            device_id: uuid::Uuid::from_u128(2),
+            installation_id: uuid::Uuid::from_u128(3),
+        };
+        let command = if delete {
+            Command::DeleteApplication {
+                expected_revision: snapshot.revision,
+                target: snapshot.applications[0].reference.clone(),
+                administrator_confirmed: true,
+            }
+        } else {
+            let mut application = snapshot.applications[0].specification.clone();
+            application.name = "New desktop name".into();
+            Command::SaveApplication {
+                expected_revision: snapshot.revision,
+                target: Some(snapshot.applications[0].reference.clone()),
+                application,
+                administrator_confirmed_host_commands: false,
+            }
+        };
+        let task = Task {
+            protocol: TASK_PROTOCOL.into(),
+            operation_id: format!("op_{}", uuid::Uuid::new_v4()),
+            binding: binding.clone(),
+            permission: Permission::ManageApplications,
+            command,
+        };
+        let executor = Executor::new(binding, sunshine, JournalFixture::default());
+        for _ in 0..2 {
+            let report = executor.deliver(&task, DeliveryMode::Execute).await;
+            validate_report(&task.command, &report).unwrap();
+            assert_eq!(
+                report,
+                Report::Unknown {
+                    reason: Uncertainty::EffectNotConfirmed
+                }
+            );
+        }
+        let requests = fixture.requests.lock().unwrap();
+        let mutations = requests
+            .iter()
+            .filter(|request| !request.starts_with(b"GET /api/apps "))
+            .collect::<Vec<_>>();
+        assert_eq!(mutations.len(), 1);
+        assert!(mutations[0].starts_with(if delete {
+            b"DELETE /api/apps/0 "
+        } else {
+            b"POST /api/apps "
+        }));
+    }
+}

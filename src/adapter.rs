@@ -231,6 +231,7 @@ pub trait Sunshine: Send {
     async fn applications(&mut self) -> Result<ApplicationsSnapshot, AdapterError> {
         Err(AdapterError::UnsupportedCapability)
     }
+    /// ResourceConflict means a guard rejected the request before any write.
     async fn save_application(
         &mut self,
         _expected: &str,
@@ -239,6 +240,7 @@ pub trait Sunshine: Send {
     ) -> Result<ApplicationsSnapshot, AdapterError> {
         Err(AdapterError::UnsupportedCapability)
     }
+    /// ResourceConflict means a guard rejected the request before any write.
     async fn delete_application(
         &mut self,
         _expected: &str,
@@ -1107,7 +1109,11 @@ impl Sunshine for LocalSunshine {
             Some(serde_json::to_vec(&value).map_err(|_| AdapterError::UnsafeConfiguration)?),
         )
         .await?;
-        self.applications().await
+        // Readback conflicts are ambiguous after POST, never a pre-write rejection.
+        self.applications().await.map_err(|error| match error {
+            AdapterError::ResourceConflict => AdapterError::ApiUnavailable,
+            error => error,
+        })
     }
 
     async fn delete_application(
@@ -1131,7 +1137,11 @@ impl Sunshine for LocalSunshine {
         }
         self.request(Method::DELETE, &format!("/api/apps/{}", matches[0]), None)
             .await?;
-        self.applications().await
+        // Readback conflicts are ambiguous after DELETE, never a pre-write rejection.
+        self.applications().await.map_err(|error| match error {
+            AdapterError::ResourceConflict => AdapterError::ApiUnavailable,
+            error => error,
+        })
     }
 
     async fn close_application(&mut self) -> Result<(), AdapterError> {

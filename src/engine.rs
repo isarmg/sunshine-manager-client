@@ -533,10 +533,17 @@ impl<A: Sunshine, J: Journal> Inner<A, J> {
                 ) {
                     return persistence_failure();
                 }
-                let _ = self
+                if let Err(AdapterError::ResourceConflict) = self
                     .sunshine
                     .save_application(expected_revision, target.as_ref(), application)
-                    .await;
+                    .await
+                {
+                    return self.finish(
+                        &task.operation_id,
+                        record,
+                        rejected_adapter(AdapterError::ResourceConflict),
+                    );
+                }
                 let report = self.reconcile(record).await;
                 self.finish(&task.operation_id, record, report)
             }
@@ -576,10 +583,17 @@ impl<A: Sunshine, J: Journal> Inner<A, J> {
                 ) {
                     return persistence_failure();
                 }
-                let _ = self
+                if let Err(AdapterError::ResourceConflict) = self
                     .sunshine
                     .delete_application(expected_revision, target)
-                    .await;
+                    .await
+                {
+                    return self.finish(
+                        &task.operation_id,
+                        record,
+                        rejected_adapter(AdapterError::ResourceConflict),
+                    );
+                }
                 let report = self.reconcile(record).await;
                 self.finish(&task.operation_id, record, report)
             }
