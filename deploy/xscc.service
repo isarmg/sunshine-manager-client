@@ -1,5 +1,5 @@
 [Unit]
-Description=Sunshine management Client (no streaming)
+Description=xscc Sunshine management client (no streaming)
 ConditionArchitecture=x86-64
 ConditionPathExists=/var/lib/xscc/provisioning/identity.json
 After=network-online.target

@@ -5,7 +5,7 @@ fn setup_interactive_autostart_defaults_to_yes_when_enter_is_pressed() {
     let mut prompts = 0;
     let enabled = setup_autostart(true, |label, default| {
         prompts += 1;
-        assert_eq!(label, "Enable service at system startup?");
+        assert_eq!(label, "Enable the service at startup?");
         assert!(default);
         confirmation_answer("", default)
     })
@@ -76,17 +76,17 @@ fn installer_test_root(directory: &tempfile::TempDir) -> PathBuf {
 }
 
 #[test]
-fn sunshine_owns_manager_and_local_api_error_presentation() {
+fn xscc_owns_manager_and_local_api_error_presentation() {
     assert_eq!(
-        SunshineErrorCatalog.message("pairing_endpoint_not_found"),
+        XsccErrorCatalog.message("pairing_endpoint_not_found"),
         Some("The configured xscs does not expose the required pairing endpoint.")
     );
     assert_eq!(
-        SunshineErrorCatalog.message("sunshine_credentials_rejected"),
+        XsccErrorCatalog.message("sunshine_credentials_rejected"),
         Some("Local Sunshine rejected its Basic Authentication credentials.")
     );
     assert_eq!(
-        SunshineErrorCatalog.message("invalid_authorization_code"),
+        XsccErrorCatalog.message("invalid_authorization_code"),
         Some(
             "The Sunshine instance authorization code must be the exact 36-character code issued by the Manager."
         )
@@ -168,7 +168,7 @@ fn incompatible_account_and_important_data_have_distinct_recovery_contracts() {
     assert_eq!(account.exit, 4);
     assert_eq!(account.code, "pairing_state_incompatible");
     assert!(
-        SunshineErrorCatalog
+        XsccErrorCatalog
             .next_step("xscc", &account)
             .unwrap()
             .contains("pair replace --interactive")
@@ -182,7 +182,7 @@ fn incompatible_account_and_important_data_have_distinct_recovery_contracts() {
         Some("artifact=execution-journal;preserved=true")
     );
     assert!(
-        SunshineErrorCatalog
+        XsccErrorCatalog
             .next_step("xscc", &important)
             .unwrap()
             .contains("Do not delete")

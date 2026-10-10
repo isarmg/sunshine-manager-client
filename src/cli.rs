@@ -17,9 +17,9 @@ const MAX_SUNSHINE_USERNAME_BYTES: usize = 256;
 const MAX_SUNSHINE_PASSWORD_BYTES: usize = 4_096;
 const MAX_CONFIRMATION_BYTES: usize = 16;
 
-struct SunshineErrorCatalog;
+struct XsccErrorCatalog;
 
-impl ProductErrorCatalog for SunshineErrorCatalog {
+impl ProductErrorCatalog for XsccErrorCatalog {
     fn message(&self, code: &'static str) -> Option<&'static str> {
         match code {
             "awaiting_configuration" => Some("xscc has not been configured."),
@@ -152,8 +152,8 @@ impl ProductErrorCatalog for SunshineErrorCatalog {
     }
 }
 
-fn emit_sunshine(command: &str, format: &str, result: &Result<Value>) -> u8 {
-    emit("xscc", command, format, result, &SunshineErrorCatalog)
+fn emit_xscc(command: &str, format: &str, result: &Result<Value>) -> u8 {
+    emit("xscc", command, format, result, &XsccErrorCatalog)
 }
 
 fn default_state() -> PathBuf {
@@ -487,7 +487,7 @@ fn setup_autostart(
     ask: impl FnOnce(&str, bool) -> Result<bool>,
 ) -> Result<bool> {
     if interactive {
-        ask("Enable service at system startup?", true)
+        ask("Enable the service at startup?", true)
     } else {
         Ok(true)
     }
@@ -974,7 +974,7 @@ fn no_args(args: &Args) -> u8 {
             "xscc logs"
         ]);
     }
-    emit_sunshine("status", &args.format, &result)
+    emit_xscc("status", &args.format, &result)
 }
 
 fn validate_product_paths(args: Args) -> Result<Args> {
@@ -998,12 +998,12 @@ pub fn entry(raw: Vec<String>) -> u8 {
     .and_then(validate_product_paths)
     {
         Ok(a) => a,
-        Err(e) => return emit_sunshine("parse", parse_format, &Err(e)),
+        Err(e) => return emit_xscc("parse", parse_format, &Err(e)),
     };
     // Help and version are read-only and must remain available without UAC.
     if args.has("--help") {
         println!(
-            "xscc: setup; config init|show|edit|validate|diff|apply; pair [status|resume|replace]; credentials update; status; doctor; service status|start|stop|restart|enable|disable; run; version\nGlobal: --format human|json|ndjson --non-interactive --timeout 60s --no-color --config ABSOLUTE_STATE_DIRECTORY (--state compatibility alias)\nsetup/pair uses --interactive or --input-stdin. Local Sunshine must use an HTTPS loopback IP and valid Sunshine API credentials; its local certificate identity is not checked. setup completes pairing, service startup policy and connection verification. No secret arguments. config edit uses VISUAL or EDITOR and commits through the same revision check as config apply. Services must be stopped for writes."
+            "xscc: setup; config init|show|edit|validate|diff|apply; pair [status|resume|replace]; credentials update; status; doctor; service status|start|stop|restart|enable|disable; run; version\nGlobal: --format human|json|ndjson --non-interactive --timeout 60s --no-color --config ABSOLUTE_STATE_DIRECTORY (--state is an alias for the same state directory)\nsetup/pair uses --interactive or --input-stdin. Local Sunshine must use an HTTPS loopback IP and valid Sunshine API credentials; its local certificate identity is not checked. setup completes pairing, service startup policy and connection verification. No secret arguments. config edit uses VISUAL or EDITOR and commits through the same revision check as config apply. Services must be stopped for writes."
         );
         return 0;
     }
@@ -1039,7 +1039,7 @@ pub fn entry(raw: Vec<String>) -> u8 {
                 }
                 return exit;
             }
-            Err(error) => return emit_sunshine("setup", &args.format, &Err(error)),
+            Err(error) => return emit_xscc("setup", &args.format, &Err(error)),
         }
     }
     if args.words.is_empty() && !args.has("--version") {
@@ -1047,14 +1047,14 @@ pub fn entry(raw: Vec<String>) -> u8 {
     }
     if args.has("--follow") {
         if args.words != ["logs"] || args.format != "ndjson" {
-            return emit_sunshine(
+            return emit_xscc(
                 "logs",
                 &args.format,
                 &Err(fail(2, "follow_requires_logs_ndjson")),
             );
         }
         #[cfg(windows)]
-        return follow_log_source("xscc", args, &SunshineErrorCatalog, |args| {
+        return follow_log_source("xscc", args, &XsccErrorCatalog, |args| {
             let path = args
                 .get("--config")
                 .or(args.get("--state"))
@@ -1064,20 +1064,14 @@ pub fn entry(raw: Vec<String>) -> u8 {
         });
         #[cfg(not(windows))]
         if let Err(error) = args.validate_options(&["--tail", "--since", "--follow"]) {
-            return xcsc::cli::emit(
-                "xscc",
-                "logs",
-                &args.format,
-                &Err(error),
-                &SunshineErrorCatalog,
-            );
+            return xcsc::cli::emit("xscc", "logs", &args.format, &Err(error), &XsccErrorCatalog);
         }
         #[cfg(not(windows))]
-        return follow_logs("xscc", &service(), args, &SunshineErrorCatalog);
+        return follow_logs("xscc", &service(), args, &XsccErrorCatalog);
     }
     if args.has("--watch") {
         if args.words != ["status"] || args.format != "ndjson" {
-            return emit_sunshine(
+            return emit_xscc(
                 "status",
                 &args.format,
                 &Err(fail(2, "watch_requires_status_ndjson")),
@@ -1089,7 +1083,7 @@ pub fn entry(raw: Vec<String>) -> u8 {
     }
     let command = args.words.join(" ");
     let result = execute(&args);
-    let exit = emit_sunshine(&command, &args.format, &result);
+    let exit = emit_xscc(&command, &args.format, &result);
     #[cfg(windows)]
     if args.words == ["setup"]
         && args.has("--installer-session")
@@ -1104,7 +1098,7 @@ fn execute(args: &Args) -> Result<Value> {
     if args.has("--version") || words == ["version"] {
         args.validate_options(&[])?;
         return Ok(
-            json!({"version":env!("CARGO_PKG_VERSION"),"commit":env!("XSCC_BUILD_SHA"),"os":std::env::consts::OS,"arch":std::env::consts::ARCH,"protocol":xscs_protocol::PROTOCOL,"cli_schema_version":1,"config_format":"sunshine-bootstrap-v1","state_format":"sunshine-identity-journal-v1","ipc_version":1}),
+            json!({"version":env!("CARGO_PKG_VERSION"),"commit":env!("XSCC_BUILD_SHA"),"os":std::env::consts::OS,"arch":std::env::consts::ARCH,"protocol":xscs_protocol::PROTOCOL,"cli_schema_version":1,"config_format":"xscc-bootstrap-v1","state_format":"xscc-identity-journal-v1","ipc_version":1}),
         );
     }
     if args.has("--state") && args.has("--config") {
@@ -1558,7 +1552,7 @@ fn watch(args: &Args) -> u8 {
         Err(_) => return 8,
     };
     rt.block_on(async {let deadline=tokio::time::Instant::now()+args.timeout;loop {
-        let result=execute(args);let code=emit_sunshine("status","ndjson",&result);if code!=0 {return code;}
+        let result=execute(args);let code=emit_xscc("status","ndjson",&result);if code!=0 {return code;}
         tokio::select!{_=tokio::signal::ctrl_c()=>return 130,_=tokio::time::sleep_until(deadline)=>return 0,_=tokio::time::sleep(std::time::Duration::from_secs(1))=>{}}
     }})
 }

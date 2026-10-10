@@ -136,7 +136,7 @@ jobs:
             throw 'Custom-path MSI uninstall left program files or service registration.'
           }
           if (Test-Path $stateRoot) { Remove-Item -LiteralPath $stateRoot -Recurse -Force }
-          Write-Host 'Sunshine MSI custom path, state preservation and Automatic service defaults passed.'
+          Write-Host 'xscc MSI custom path, state preservation and Automatic service defaults passed.'
       - name: Verify extracted package and actual Windows Service install lifecycle
         shell: pwsh
         run: |

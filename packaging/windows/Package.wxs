@@ -25,7 +25,7 @@
       </Directory>
     </StandardDirectory>
     <StandardDirectory Id="CommonAppDataFolder">
-      <Directory Id="SunshineStateDirectory" Name="Xscc">
+      <Directory Id="XsccStateDirectory" Name="Xscc">
         <Component Id="PreserveConfigurationSelection" Guid="F124AD7F-A435-4C44-A181-C7FE26DC0268" Bitness="always64">
           <RegistryValue Root="HKLM" Key="Software\sarmg\xscc" Name="PreserveConfiguration" Type="integer" Value="1" KeyPath="yes" />
         </Component>
@@ -38,7 +38,7 @@
       </Directory>
     </StandardDirectory>
     <StandardDirectory Id="ProgramMenuFolder" />
-    <Feature Id="Complete" Title="xscc program" Description="Install the Sunshine management client and service." Level="1" AllowAbsent="no" Display="expand">
+    <Feature Id="Complete" Title="xscc program" Description="Install xscc client program and service." Level="1" AllowAbsent="no" Display="expand">
       <ComponentRef Id="ClientService" />
       <ComponentRef Id="PreserveConfigurationSelection" />
       <ComponentRef Id="PreserveDataSelection" />

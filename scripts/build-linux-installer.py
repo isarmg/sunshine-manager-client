@@ -19,7 +19,7 @@ def main():
     if not re.fullmatch(r'\d+\.\d+\.\d+(?:-rc\.\d+)?', args.version):
         parser.error('invalid version')
     version = args.version.replace('-rc.', '~rc')
-    with tempfile.TemporaryDirectory(prefix='sunshine-deb-') as temporary:
+    with tempfile.TemporaryDirectory(prefix='xscc-deb-') as temporary:
         stage = Path(temporary)
         stage.chmod(0o755)
         for directory in ['DEBIAN', 'opt/xscc', 'usr/bin', 'usr/lib/systemd/system', 'usr/share/doc/xscc']:
@@ -35,9 +35,9 @@ Maintainer: sarmg <maintainers@sarmg.org>
 Depends: libc6 (>= 2.39), libgcc-s1, libssl3t64, ca-certificates, systemd, passwd
 Section: admin
 Priority: optional
-Description: xscc 的 Sunshine 本机管理客户端
- 安装完成后运行 sudo xscc setup。
- 不转发视频、不开放入站监听，也不修改 Sunshine 软件本体。
+Description: xscc local Sunshine management client
+ Run sudo xscc setup after installation.
+ Does not forward video, open inbound listeners or modify the Sunshine installation.
 ''')
         scripts = {
             'preinst': '''#!/bin/sh

@@ -77,7 +77,7 @@ try {
     }
     $command = '"' + $target + '" --windows-service --state "' + $stateDir + '"'
     if (-not $existingService) {
-    $null = New-Service -Name Xscc -DisplayName 'Sunshine management Client' -BinaryPathName $command -StartupType Automatic -Description 'Independent management only; no video forwarding or general remote control.'
+    $null = New-Service -Name Xscc -DisplayName 'xscc' -BinaryPathName $command -StartupType Automatic -Description 'Independent management only; no video forwarding or general remote control.'
     $madeService = $true
     }
     # Existing registrations keep the administrator's chosen startup type.
