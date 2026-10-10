@@ -951,3 +951,119 @@ async fn restart_adapter_accepts_successful_empty_response() {
     .await;
     assert!(adapter(&fixture).restart().await.is_ok());
 }
+
+#[tokio::test]
+async fn renaming_a_sparse_application_preserves_sunshine_launch_defaults() {
+    let temporary = tempfile::tempdir().unwrap();
+    certificates(temporary.path());
+    let original = serde_json::json!({
+        "name": "Game launcher", "cmd": "fixture-launcher",
+        "prep-cmd": [{"do": "fixture-prepare"}, {"undo": "fixture-restore"}]
+    });
+    let updated = serde_json::json!({
+        "name": "Game launcher renamed", "cmd": "fixture-launcher",
+        "auto-detach": true, "wait-all": true,
+        "prep-cmd": [
+            {"do": "fixture-prepare", "undo": ""},
+            {"do": "", "undo": "fixture-restore"}
+        ]
+    });
+    let fixture = serve(
+        temporary.path(),
+        vec![
+            response(serde_json::json!({"apps": [original.clone()], "env": {}})),
+            response(serde_json::json!({"apps": [original], "env": {}})),
+            response(serde_json::json!({"status": true})),
+            response(serde_json::json!({"apps": [updated], "env": {}})),
+        ],
+    )
+    .await;
+    let mut sunshine = adapter(&fixture);
+    let initial = sunshine.applications().await.unwrap();
+    let view = &initial.applications[0];
+    let mut renamed = view.specification.clone();
+    renamed.name = "Game launcher renamed".into();
+    let saved = sunshine
+        .save_application(&initial.revision, Some(&view.reference), &renamed)
+        .await
+        .unwrap();
+    assert_eq!(saved.applications[0].specification, renamed);
+    let requests = fixture.requests.lock().unwrap();
+    let request = String::from_utf8_lossy(&requests[2]);
+    assert!(request.starts_with("POST /api/apps "));
+    let body: serde_json::Value =
+        serde_json::from_str(request.split_once("\r\n\r\n").unwrap().1).unwrap();
+    assert_eq!(body["index"], 0);
+    assert_eq!(body["auto-detach"], true);
+    assert_eq!(body["wait-all"], true);
+    assert_eq!(body["prep-cmd"][0]["undo"], "");
+    assert_eq!(body["prep-cmd"][1]["do"], "");
+}
+
+#[tokio::test]
+async fn diagnostics_distinguishes_unsupported_version_from_connection_and_credentials() {
+    use xscc::adapter::ServiceControlMode;
+
+    let temporary = tempfile::tempdir().unwrap();
+    certificates(temporary.path());
+    let fixture = serve(
+        temporary.path(),
+        vec![
+            response(serde_json::json!({
+                "status": true, "platform": "linux", "version": "999.0.0"
+            })),
+            "HTTP/1.1 426 Upgrade Required\r\nContent-Length: 0\r\nConnection: close\r\n\r\n"
+                .into(),
+            "HTTP/1.1 401 Unauthorized\r\nContent-Length: 0\r\nConnection: close\r\n\r\n".into(),
+            "HTTP/1.1 503 Service Unavailable\r\nContent-Length: 0\r\nConnection: close\r\n\r\n"
+                .into(),
+            response(config("28")),
+        ],
+    )
+    .await;
+    let binding = Binding {
+        manager_id: uuid::Uuid::from_u128(1),
+        device_id: uuid::Uuid::from_u128(2),
+        installation_id: uuid::Uuid::from_u128(3),
+    };
+    let sunshine = LocalSunshine::new_with_service(
+        &fixture.endpoint,
+        "fixture-user",
+        Zeroizing::new("fixture-password".into()),
+        ServiceControlMode::Disabled,
+    )
+    .unwrap();
+    let executor = Executor::new(binding.clone(), sunshine, JournalFixture::default());
+    for expected in [
+        None,
+        None,
+        Some((true, false)),
+        Some((false, false)),
+        Some((true, true)),
+    ] {
+        let task = Task {
+            protocol: TASK_PROTOCOL.into(),
+            operation_id: format!("op_{}", uuid::Uuid::new_v4()),
+            binding: binding.clone(),
+            permission: Permission::ReadDiagnostics,
+            command: Command::ReadDiagnostics {},
+        };
+        let report = executor.deliver(&task, DeliveryMode::Execute).await;
+        validate_report(&task.command, &report).unwrap();
+        match expected {
+            None => assert_eq!(
+                report,
+                Report::Rejected {
+                    reason: Rejection::UnsupportedVersion
+                }
+            ),
+            Some((reachable, authenticated)) => {
+                let Report::DiagnosticsRead { snapshot } = report else {
+                    panic!("expected diagnostics");
+                };
+                assert_eq!(snapshot.api_reachable, reachable);
+                assert_eq!(snapshot.authentication_accepted, authenticated);
+            }
+        }
+    }
+}

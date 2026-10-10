@@ -688,6 +688,9 @@ impl<A: Sunshine, J: Journal> Inner<A, J> {
                         Some(config.revision()),
                     ),
                     Err(AdapterError::CredentialsRejected) => (None, None, true, false, None),
+                    Err(error @ AdapterError::UnsupportedVersion { .. }) => {
+                        return self.finish(&task.operation_id, record, rejected_adapter(error));
+                    }
                     Err(_) => (None, None, false, false, None),
                 };
                 self.finish(

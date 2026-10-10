@@ -627,8 +627,29 @@ fn applications_from_bytes(bytes: &[u8]) -> Result<ApplicationsSnapshot, Adapter
     let mut canonical = Vec::with_capacity(apps.len());
     let mut references = std::collections::BTreeSet::new();
     for value in apps {
+        // Sunshine's sparse apps.json uses true for these flags and empty strings
+        // for omitted preparation steps. Normalize its defaults at the API boundary.
+        let mut value = value.clone();
+        let app = value
+            .as_object_mut()
+            .ok_or(AdapterError::UnsafeConfiguration)?;
+        for key in ["auto-detach", "wait-all"] {
+            app.entry(key).or_insert(Value::Bool(true));
+        }
+        if let Some(commands) = app.get_mut("prep-cmd").and_then(Value::as_array_mut) {
+            for command in commands {
+                let command = command
+                    .as_object_mut()
+                    .ok_or(AdapterError::UnsafeConfiguration)?;
+                for key in ["do", "undo"] {
+                    command
+                        .entry(key)
+                        .or_insert_with(|| Value::String(String::new()));
+                }
+            }
+        }
         let specification: ApplicationSpec =
-            serde_json::from_value(value.clone()).map_err(|_| AdapterError::UnsafeConfiguration)?;
+            serde_json::from_value(value).map_err(|_| AdapterError::UnsafeConfiguration)?;
         specification
             .validate(true)
             .map_err(|_| AdapterError::UnsafeConfiguration)?;
@@ -1350,6 +1371,86 @@ impl Sunshine for LocalSunshine {
     ) -> Result<ServiceState, AdapterError> {
         self.require_effect_budget()?;
         self.service.control(action).await
+    }
+}
+
+#[cfg(test)]
+mod application_mapping_tests {
+    use super::*;
+
+    fn snapshot(application: Value) -> Result<ApplicationsSnapshot, AdapterError> {
+        applications_from_bytes(&serde_json::to_vec(&json!({"apps": [application]})).unwrap())
+    }
+
+    #[test]
+    fn sparse_application_uses_sunshine_launch_defaults() {
+        let sparse = snapshot(json!({"name": "Game launcher", "cmd": "launcher"})).unwrap();
+        let explicit = snapshot(json!({
+            "name": "Game launcher", "cmd": "launcher",
+            "auto-detach": true, "wait-all": true
+        }))
+        .unwrap();
+        assert!(sparse.applications[0].specification.auto_detach);
+        assert!(sparse.applications[0].specification.wait_all);
+        assert_eq!(
+            sparse, explicit,
+            "equivalent upstream defaults have stable references"
+        );
+    }
+
+    #[test]
+    fn one_way_preparation_commands_fill_only_the_missing_step() {
+        let sparse = snapshot(json!({"name": "Desktop", "prep-cmd": [
+            {"do": "prepare"}, {"undo": "restore"}
+        ]}))
+        .unwrap();
+        let explicit = snapshot(json!({"name": "Desktop", "prep-cmd": [
+            {"do": "prepare", "undo": ""}, {"do": "", "undo": "restore"}
+        ]}))
+        .unwrap();
+        assert_eq!(sparse, explicit);
+        let commands = &sparse.applications[0].specification.prep_cmd;
+        assert_eq!(commands[0].execute, "prepare");
+        assert!(commands[0].undo.is_empty());
+        assert!(commands[1].execute.is_empty());
+        assert_eq!(commands[1].undo, "restore");
+    }
+
+    #[test]
+    fn explicit_false_and_empty_application_values_are_preserved() {
+        let explicit = snapshot(json!({"name": "Desktop", "cmd": "", "output": "",
+            "auto-detach": false, "wait-all": false,
+            "prep-cmd": [{"do": "prepare", "undo": "", "elevated": false}]
+        }))
+        .unwrap();
+        let application = &explicit.applications[0].specification;
+        assert!(!application.auto_detach);
+        assert!(!application.wait_all);
+        assert!(application.cmd.is_empty());
+        assert!(application.output.is_empty());
+        assert!(application.prep_cmd[0].undo.is_empty());
+        assert!(!application.prep_cmd[0].elevated);
+        let partial = snapshot(json!({"name": "Desktop", "auto-detach": false})).unwrap();
+        assert!(!partial.applications[0].specification.auto_detach);
+        assert!(partial.applications[0].specification.wait_all);
+    }
+
+    #[test]
+    fn normalization_keeps_existing_type_and_content_validation() {
+        for invalid in [
+            json!({"name": "Desktop", "auto-detach": "true"}),
+            json!({"name": "Desktop", "auto-detach": null}),
+            json!({"name": "Desktop", "wait-all": 1}),
+            json!({"name": "Desktop", "prep-cmd": null}),
+            json!({"name": "Desktop", "prep-cmd": ["prepare"]}),
+            json!({"name": "Desktop", "prep-cmd": [{"do": null, "undo": "restore"}]}),
+            json!({"name": "Desktop", "prep-cmd": [{"do": "prepare", "undo": false}]}),
+            json!({"name": "Desktop", "prep-cmd": [{}]}),
+            json!({"name": "Desktop", "prep-cmd": [{"do": "", "undo": ""}]}),
+            json!({"name": "Desktop", "unknown-setting": true}),
+        ] {
+            assert_eq!(snapshot(invalid), Err(AdapterError::UnsafeConfiguration));
+        }
     }
 }
 
