@@ -19,7 +19,7 @@ if [[ $unsafe == 1 ]]; then
   fi
   sudo test ! -e '/Library/Application Support/xscc'
   sudo test ! -e /Library/LaunchDaemons/org.sarmg.xscc.plist
-  ! dscl . -read /Users/_sunshineclient >/dev/null 2>&1
+  ! dscl . -read /Users/_xscc >/dev/null 2>&1
 fi
 for directory in /usr/local /usr/local/bin /usr/local/libexec; do
   sudo install -d -m 0755 -o root -g wheel "$directory"

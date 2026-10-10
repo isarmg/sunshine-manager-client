@@ -20,7 +20,7 @@ use tokio_tungstenite::{
     },
 };
 use url::Url;
-use xcsc_runtime::RetryBackoff;
+use xcsc::runtime::RetryBackoff;
 use xscs_protocol::{
     Binding, Capabilities, ClientMessage, ConfigSnapshot, MAX_MESSAGE_BYTES, ManagerMessage,
     PROTOCOL, Report, WEBSOCKET_SUBPROTOCOL, decode_manager_message,
@@ -30,10 +30,10 @@ use zeroize::Zeroizing;
 fn session_record(
     binding: &Binding,
     event: &str,
-    level: xcss_log::Level,
+    level: xcsc::log::Level,
     code: Option<&str>,
-) -> Result<xcss_log::LogRecord, xcss_log::LogError> {
-    let mut record = xcss_log::LogRecord::instance(
+) -> Result<xcsc::log::LogRecord, xcsc::log::LogError> {
+    let mut record = xcsc::log::LogRecord::instance(
         "xscc",
         "manager-transport",
         event,
@@ -51,7 +51,7 @@ fn session_record(
 fn session_log(
     binding: &Binding,
     event: &str,
-    level: xcss_log::Level,
+    level: xcsc::log::Level,
     code: Option<&str>,
 ) -> Result<(), TransportError> {
     session_record(binding, event, level, code)
@@ -148,7 +148,7 @@ impl ManagerConnection {
         Ok(socket)
     }
 
-    /// Terminal authentication failure stops reconnecting. Other reconnects use Foundation backoff.
+    /// Terminal authentication failure stops reconnecting. Other reconnects use xcsc backoff.
     /// The caller owns protected credential/revocation state and retains the Executor across sessions.
     pub async fn run<A: Sunshine + 'static, J: Journal + 'static>(
         &self,
@@ -197,7 +197,7 @@ impl ManagerConnection {
                 Err(TransportError::Diagnostics) => return result,
                 _ => ("xscc.session.disconnected", "connection_failed"),
             };
-            session_log(&binding, event, xcss_log::Level::Warn, Some(code))?;
+            session_log(&binding, event, xcsc::log::Level::Warn, Some(code))?;
             if matches!(
                 result,
                 Err(TransportError::Revoked
@@ -246,7 +246,7 @@ impl ManagerConnection {
         session_log(
             binding,
             "xscc.session.connected",
-            xcss_log::Level::Info,
+            xcsc::log::Level::Info,
             None,
         )?;
         let mut tick = tokio::time::interval(HEARTBEAT_INTERVAL);
@@ -337,7 +337,7 @@ impl ManagerConnection {
                     if last_peer.elapsed() >= PEER_TIMEOUT { return Err(TransportError::Disconnected); }
                     if execution.active.is_none() {
                         // Fetch final receipts after a human resolution, preserving uncertain intent
-                        // until the Manager confirms that Foundation has a terminal outcome.
+                        // until the Manager confirms that xcsc has a terminal outcome.
                         for (id, record) in executor.pending_results().await.map_err(|_| TransportError::Configuration)? {
                             if let Some(report) = record.report {
                                 execution.completed.entry(id.clone()).or_insert((record.fingerprint, report.clone()));

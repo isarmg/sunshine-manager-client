@@ -92,7 +92,7 @@ def main():
     subprocess.run(["cargo", "build", "--locked", "--release", "-p", "xscc", "--target", target], cwd=ROOT, env=env, check=True)
     metadata = json.loads(run("cargo", "metadata", "--locked", "--no-deps", "--format-version", "1"))
     binary = Path(metadata["target_directory"]) / target / "release" / executable
-    expected = f"xscc {version} (git {sha}; sunshine-management/1)"
+    expected = f"xscc {version} (git {sha}; xscs-management/1)"
     if run(str(binary), "--version") != expected:
         raise RuntimeError("binary source identity mismatch")
     name = f"xscc-{version}-{target}"
@@ -106,7 +106,7 @@ def main():
         # the executable, immutable docs and verification metadata; no shell,
         # PowerShell or Python installer wrapper is distributed.
         manifest = {"product": "xscc", "version": version, "source_commit": sha, "target": target,
-                    "protocol": "sunshine-management/1", "authenticode_signed": False, "native_acceptance": "required", "notarized": False,
+                    "protocol": "xscs-management/1", "authenticode_signed": False, "native_acceptance": "required", "notarized": False,
                     "files": {p.name: digest(p) for p in package_files(stage)}}
         (stage / "manifest.json").write_text(json.dumps(manifest, indent=2) + "\n", encoding="utf-8")
         (stage / "SHA256SUMS").write_text("".join(f"{digest(p)}  {p.name}\n" for p in package_files(stage)), encoding="utf-8")

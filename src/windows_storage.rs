@@ -3,7 +3,7 @@
 use super::sqlite::Facts;
 use super::{StorageError, storage_error};
 use std::path::Path;
-use xcsc_fs_safety::{
+use xcsc::fs_safety::{
     AdvisoryLock, AtomicFile, EntryName, InventoryLimits, PrivateDirectory, PrivateFileAccess,
     WindowsPrivateAccess, WindowsPrivateFile,
 };

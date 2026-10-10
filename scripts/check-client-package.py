@@ -97,7 +97,7 @@ def verify(archive, destination, sha):
     if seen != allowed:
         raise ValueError("incomplete package")
     manifest = json.loads((root / "manifest.json").read_text())
-    if manifest["source_commit"] != sha or manifest["target"] != target or manifest["protocol"] != "sunshine-management/1" or manifest["product"] != "xscc":
+    if manifest["source_commit"] != sha or manifest["target"] != target or manifest["protocol"] != "xscs-management/1" or manifest["product"] != "xscc":
         raise ValueError("package identity mismatch")
     if name != f"xscc-{manifest['version']}-{target}" or manifest["authenticode_signed"] is not False:
         raise ValueError("package version or signature declaration mismatch")
@@ -109,7 +109,7 @@ def verify(archive, destination, sha):
         raise ValueError("file checksum mismatch")
     binary = root / ("xscc.exe" if windows else "xscc")
     binary.chmod(0o755)
-    if run(str(binary), "--version") != f"xscc {manifest['version']} (git {sha}; sunshine-management/1)":
+    if run(str(binary), "--version") != f"xscc {manifest['version']} (git {sha}; xscs-management/1)":
         raise ValueError("executable identity mismatch")
     return root, binary
 

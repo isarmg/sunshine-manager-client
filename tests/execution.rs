@@ -379,7 +379,7 @@ async fn an_uncertain_save_is_not_retried_even_when_old_configuration_is_still_p
     let journal = MemoryJournal::default();
     let task = patch();
     // The session changed, but the current task contract and persisted identity did not.
-    assert_eq!(task.protocol, "sunshine-task/1");
+    assert_eq!(task.protocol, "xscs-task/1");
     assert_ne!(task.protocol, PROTOCOL);
     journal.0.lock().unwrap().values.insert(
         task.operation_id.clone(),

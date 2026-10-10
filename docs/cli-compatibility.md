@@ -5,13 +5,13 @@
 | 维度 | 当前契约 |
 | --- | --- |
 | Client 程序 | 1.0.0 |
-| Manager 通信 | sunshine-management/1；WSS subprotocol sunshine-management.v1；/xscc/v1/ |
-| 业务任务身份 | TASK_PROTOCOL = sunshine-management/1；现有任务结构、权限、绑定与指纹字节不变 |
-| 产品协议输入 | xscs-protocol 1.0.0，官方 Git revision f7943abee4bb74eb6b2a86687ca1ce28028070d9 和精确 crate 版本 |
+| Manager 通信 | xscs-management/1；WSS subprotocol xscs-management.v1；/xscc/v1/ |
+| 业务任务身份 | TASK_PROTOCOL = xscs-task/1；任务结构、权限和绑定由这一当前合同定义，指纹包含协议名称 |
+| 产品协议输入 | xscs-protocol 1.0.0，官方 Git revision 41330c0e17d81f951dd7b81d6fdb64be79cff2b8 和精确 crate 版本 |
 | Sunshine | v2026.914.233613 |
-| Client Foundation | 0.10.5 / ab53bb6157117169b6d03d0a61497faa9ca718bd，真实已提交源码 |
+| xcsc | xcsc 1.0.0 / 00770c007912b276f5bb1075abfefe3c31026276，真实已提交源码 |
 | 设备账户 | 当前 v1 授权与配对状态 |
-| IPC | Foundation GetStatus/1，校验进程世代、安装身份与配置修订 |
+| IPC | xcsc GetStatus/1，校验进程世代、安装身份与配置修订 |
 
 通信契约新增必填 configuration_overwrite 与 pending_pairing_listing。客户端按真实实现声明；Server 按能力及权限验证，不根据 client_version 推测。只接受当前通信身份，没有旧接口转发或自动回退。Task 的语义没有改变，因此使用独立的既有任务身份；升级不会重写、遗忘或重做既有副作用记录。
 

@@ -26,7 +26,7 @@ else
   target=/usr/local/libexec/xscc
   unit=/Library/LaunchDaemons/org.sarmg.xscc.plist
   source_unit=$resource_dir/org.sarmg.xscc.plist
-  account=_sunshineclient; group=_sunshineclient
+  account=_xscc; group=_xscc
   service_uid=$(dscl . -read /Users/$account UniqueID | awk '{print $2}')
   service_gid=$(dscl . -read /Groups/$group PrimaryGroupID | awk '{print $2}')
   [[ $service_uid != 0 && $service_uid =~ ^[0-9]+$ && $service_gid =~ ^[0-9]+$ ]] || exit 8
@@ -66,7 +66,7 @@ if [[ -f $unit ]]; then
 fi
 # Stage in an administrator-only directory. A failed replacement restores the
 # exact previous program/service files; user data is never a rollback target.
-backup=$(mktemp -d "$(dirname "$unit")/.sunshine-repair.XXXXXX")
+backup=$(mktemp -d "$(dirname "$unit")/.xscc-repair.XXXXXX")
 chmod 700 "$backup"
 had_target=0; had_unit=0; had_link=0; active=0; committed=0; stopped=0
 [[ ! -f $target ]] || { cp -p "$target" "$backup/binary"; had_target=1; }

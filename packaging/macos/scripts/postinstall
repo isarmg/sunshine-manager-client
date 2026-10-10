@@ -3,8 +3,8 @@ set -eu
 
 [ "$(uname -s)" = Darwin ] && [ "$(uname -m)" = arm64 ] && [ "$(id -u)" = 0 ] || exit 8
 
-account='_sunshineclient'
-group='_sunshineclient'
+account='_xscc'
+group='_xscc'
 state='/Library/Application Support/xscc'
 plist='/Library/LaunchDaemons/org.sarmg.xscc.plist'
 binary='/usr/local/libexec/xscc'
@@ -149,7 +149,7 @@ else
   chmod 0600 "$log"
 fi
 
-expected_rotation='/var/log/xscc.log _sunshineclient:_sunshineclient 600 7 1024 * J'
+expected_rotation='/var/log/xscc.log _xscc:_xscc 600 7 1024 * J'
 if [ -e "$rotation" ] || [ -L "$rotation" ]; then
   [ -f "$rotation" ] && [ ! -L "$rotation" ] || exit 8
   [ "$(cat "$rotation")" = "$expected_rotation" ] || exit 8

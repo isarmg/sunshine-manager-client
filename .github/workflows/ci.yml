@@ -29,6 +29,8 @@ jobs:
         run: python3 scripts/check-workflow-supply-chain.py
       - name: Install exact Rust
         run: rustup toolchain install 1.99.0 --profile minimal --component clippy,rustfmt
+      - name: Verify locked client support boundary
+        run: python scripts/check-xcsc-source.py
       - name: Test Client and secure local transport
         run: |
           cargo fmt --all -- --check
@@ -82,6 +84,8 @@ jobs:
         run: python -m unittest discover -s scripts/tests -p 'test_client_package.py'
       - name: Install exact Rust
         run: rustup toolchain install 1.99.0 --profile minimal --component clippy,rustfmt
+      - name: Verify locked client support boundary
+        run: python scripts/check-xcsc-source.py
       - name: Test Client and secure local transport
         shell: pwsh
         run: |
@@ -161,6 +165,8 @@ jobs:
           persist-credentials: false
       - name: Install exact Rust
         run: rustup toolchain install 1.99.0 --profile minimal --component clippy,rustfmt
+      - name: Verify locked client support boundary
+        run: python scripts/check-xcsc-source.py
       - name: Native protected storage, journal recovery and CLI tests
         run: |
           cargo test --locked
@@ -180,7 +186,7 @@ jobs:
         run: |
           bash scripts/prepare-native-macos-fixture.sh "$PWD/target/release/xscc"
           sudo sh deploy/macos/install-macos.sh "$PWD/target/release/xscc"
-          sudo env GITHUB_ACTIONS=true RUNNER_ENVIRONMENT="$RUNNER_ENVIRONMENT" python3 scripts/native-service-acceptance.py --binary /usr/local/libexec/xscc --seed "$PWD/target/debug/examples/native_acceptance_seed" --state "/Library/Application Support/xscc" --service-user _sunshineclient:_sunshineclient
+          sudo env GITHUB_ACTIONS=true RUNNER_ENVIRONMENT="$RUNNER_ENVIRONMENT" python3 scripts/native-service-acceptance.py --binary /usr/local/libexec/xscc --seed "$PWD/target/debug/examples/native_acceptance_seed" --state "/Library/Application Support/xscc" --service-user _xscc:_xscc
           sudo sh deploy/macos/uninstall-macos.sh
           sudo test -f "/Library/Application Support/xscc/provisioning/identity.json"
           sudo test -d "/Library/Application Support/xscc/journal"

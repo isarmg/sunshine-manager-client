@@ -219,4 +219,4 @@ xscc logs --tail 100
 
 ## 运行日志
 
-Manager 连接、断开、授权拒绝和协议失败使用 Foundation 同一 `xcss-log` 实现输出 UTC JSON 行到 stderr，事件为 `xscc.session.*`。每条带设备 UUID 的 `instance_id` 和稳定失败 `error_code`；不输出凭据、Manager endpoint 或任意内部错误链。诊断写入失败返回 `diagnostics_unavailable` 并停止运行，由平台服务宿主报告。
+Manager 连接、断开、授权拒绝和协议失败使用 xcsc 内部 `xcsc::log` 实现输出 UTC JSON 行到 stderr，事件为 `xscc.session.*`。每条带设备 UUID 的 `instance_id` 和稳定失败 `error_code`；不输出凭据、Manager endpoint 或任意内部错误链。诊断写入失败返回 `diagnostics_unavailable` 并停止运行，由平台服务宿主报告。

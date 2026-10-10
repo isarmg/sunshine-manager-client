@@ -14,7 +14,7 @@
 |---|---|---|---|
 | Windows 11 x64 | `Xscc` / LocalSystem | `C:\ProgramData\Xscc` | `SunshineService` |
 | Ubuntu 24.04 x86_64 | `xscc.service` / `xscc` | `/var/lib/xscc` | 系统级 `sunshine.service` |
-| macOS Apple Silicon | `org.sarmg.xscc` / `_sunshineclient` | `/Library/Application Support/xscc` | 当前不提供服务控制能力 |
+| macOS Apple Silicon | `org.sarmg.xscc` / `_xscc` | `/Library/Application Support/xscc` | 当前不提供服务控制能力 |
 
 `xscc service ...` 管理的是 Client 代理。停止代理后 Manager 将无法下发新的本机管理任务；已安装的 Sunshine 有自己的服务状态。`--config` 选择整个状态目录，系统服务操作使用默认目录。
 
@@ -415,9 +415,11 @@ sudo installer -pkg ./xscc-1.0.0-macos-arm64-unsigned.pkg -target /
 sudo /usr/local/bin/xscc setup
 ```
 
-状态路径 `/Library/Application Support/xscc`，系统服务账户 `_sunshineclient`；LaunchDaemon `org.sarmg.xscc` 无需用户登录即可运行。诊断命令 `sudo launchctl print system/org.sarmg.xscc`，日志 `/var/log/xscc.log`。
+状态路径 `/Library/Application Support/xscc`，系统服务账户 `_xscc`；LaunchDaemon `org.sarmg.xscc` 无需用户登录即可运行。诊断命令 `sudo launchctl print system/org.sarmg.xscc`，日志 `/var/log/xscc.log`。
 
 再次运行原生 PKG 即可覆盖旧程序，或在保留状态的卸载后重装。安装器保留身份和执行记录；随后运行 `/usr/local/bin/xscc setup`。发行文件未签名、未公证，使用系统提供的本地批准入口允许已校验的程序运行，不要全局关闭系统安全检查。
+
+本次名称复查统一了 macOS 账户 `_xscc`。覆盖安装和修复只接受该账户对应的实际 UID、受保护状态和日志属主；如果此前安装使用了其他名称的服务账户，安装器会保留旧文件并拒绝接管。先停止服务，用原兼容版本核对尚未确认的任务并导出配置，在 xscs 撤销旧绑定；将旧状态和日志作为受保护归档保留后，再按本章进行全新安装和配对。不要重命名系统账户、复用旧 UID 或通过递归 `chown` 绕过检查。
 
 ### Sunshine 服务控制
 

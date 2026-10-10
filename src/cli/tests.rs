@@ -157,7 +157,7 @@ fn compatibility_manifest_tracks_the_manager_protocol() {
     let manifest: serde_json::Value =
         serde_json::from_str(include_str!("../../compatibility.json")).unwrap();
     assert_eq!(manifest["xscs_protocol"], 1);
-    assert_eq!(xscs_protocol::PROTOCOL, "sunshine-management/1");
+    assert_eq!(xscs_protocol::PROTOCOL, "xscs-management/1");
 }
 
 #[test]

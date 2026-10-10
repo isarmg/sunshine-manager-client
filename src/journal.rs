@@ -1,9 +1,9 @@
-//! Linux durable execution facts, using Foundation's held-directory and atomic-file primitives.
+//! Linux durable execution facts, using xcsc's held-directory and atomic-file primitives.
 //! Windows uses its native SQLite journal instead of the Unix file backend,
 //! whose ownership and handle guarantees do not model Windows service ACLs.
 use crate::engine::{ExecutionRecord, Journal, JournalError};
 use std::{collections::BTreeSet, path::Path};
-use xcsc_fs_safety::{AdvisoryLock, AtomicFile, EntryName, InventoryLimits, PrivateDirectory};
+use xcsc::fs_safety::{AdvisoryLock, AtomicFile, EntryName, InventoryLimits, PrivateDirectory};
 use xscs_protocol::validate_revision;
 
 const MAX_RECORDS: usize = 4096;

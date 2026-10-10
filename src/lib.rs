@@ -11,7 +11,7 @@ pub mod storage;
 pub mod transport;
 
 pub mod cli;
-pub use xcsc_runtime::local_status as runtime_status;
+pub use xcsc::runtime::local_status as runtime_status;
 
 mod process_identity;
 

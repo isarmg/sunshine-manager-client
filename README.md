@@ -2,7 +2,7 @@
 
 `xscc` `1.0.0` 是 xscs 的本机管理代理。它主动连接 Manager，读取和修改本机 Sunshine 配置、应用、日志与维护状态，并通过固定的平台服务适配器控制已安装的 Sunshine 服务；它不代理媒体流，也不安装 Sunshine。
 
-`1.0.0` 使用 Rust 1.99.0 和 Foundation Client 1.0.0，通信契约 1 按实际实现报告配置覆盖与待配对列表能力；任务身份与副作用指纹保持独立。当前结构严格解码，Windows facts 表和 FULL 事务、Unix 私有执行事实继续保全。发行按最终受控依赖源码执行各平台原生 CI。
+`1.0.0` 使用 Rust 1.99.0 和 xcsc 1.0.0，通信契约 1 按实际实现报告配置覆盖与待配对列表能力；任务身份与副作用指纹保持独立。当前结构严格解码，Windows facts 表和 FULL 事务、Unix 私有执行事实继续保全。发行按最终受控依赖源码执行各平台原生 CI。
 
 当前支持 Windows x64、Ubuntu 24.04 x64 和 macOS Apple Silicon，固定适配 Sunshine `v2026.914.233613`。安装包签名与实机验收边界以对应 Release 为准。
 
@@ -52,7 +52,7 @@ cargo test --locked --test local_https -- --ignored --skip authenticated_wss_del
 
 代码采用 [Apache License 2.0](LICENSE-APACHE)。
 
-当前设备通信使用协议 v1，业务任务保持独立的既有身份，需与同步更新的 Manager 联调。产品协议 1.0.0 固定官方上游源码 f7943abee4bb74eb6b2a86687ca1ce28028070d9，并由 Cargo.lock 验证输入。结果先持久化、收存后压缩为去重记录；WSS 中断不取消已开始的执行。详见 [Manager 通信与执行恢复](https://github.com/isarmg/xscs/blob/main/docs/communication-reliability.md)。
+当前设备通信使用协议 v1，业务任务保持独立的既有身份，需与同步更新的 Manager 联调。产品协议 1.0.0 固定官方上游源码 41330c0e17d81f951dd7b81d6fdb64be79cff2b8，并由 Cargo.lock 验证输入。结果先持久化、收存后压缩为去重记录；WSS 中断不取消已开始的执行。详见 [Manager 通信与执行恢复](https://github.com/isarmg/xscs/blob/main/docs/communication-reliability.md)。
 
 ## 仓库布局
 
@@ -61,3 +61,5 @@ cargo test --locked --test local_https -- --ignored --skip authenticated_wss_del
 当前发布版本：**1.0.0**。参见 [1.0.0 发布说明](docs/releases/1.0.0.md)和[项目命名](docs/naming.md)。
 
 CLI 参数、输出与兼容性约定见 [CLI 兼容性](docs/cli-compatibility.md)。
+
+公共支撑的职责、单体依赖、平台边界与验证方法见[公共支撑说明](docs/common-support.md)。

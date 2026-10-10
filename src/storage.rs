@@ -40,13 +40,13 @@ pub(crate) fn storage_error(error: impl std::fmt::Debug + std::any::Any) -> Stor
             _ => StorageError::Unsafe,
         };
     }
-    if let Some(error) = error.downcast_ref::<xcsc_fs_safety::Error>() {
+    if let Some(error) = error.downcast_ref::<xcsc::fs_safety::Error>() {
         return match error {
-            xcsc_fs_safety::Error::AlreadyLocked(_) => StorageError::Busy,
-            xcsc_fs_safety::Error::Io(io) if io.kind() == std::io::ErrorKind::PermissionDenied => {
+            xcsc::fs_safety::Error::AlreadyLocked(_) => StorageError::Busy,
+            xcsc::fs_safety::Error::Io(io) if io.kind() == std::io::ErrorKind::PermissionDenied => {
                 StorageError::PermissionDenied
             }
-            xcsc_fs_safety::Error::PublishedDurabilityUnknown(_) => StorageError::Published,
+            xcsc::fs_safety::Error::PublishedDurabilityUnknown(_) => StorageError::Published,
             _ => StorageError::Unsafe,
         };
     }
@@ -54,8 +54,8 @@ pub(crate) fn storage_error(error: impl std::fmt::Debug + std::any::Any) -> Stor
 }
 
 #[cfg(any(target_os = "linux", target_os = "macos"))]
-pub fn prepare_root(path: &Path) -> Result<xcsc_fs_safety::PrivateDirectory, StorageError> {
-    xcsc_fs_safety::PrivateDirectory::create_for_administration(path).map_err(storage_error)
+pub fn prepare_root(path: &Path) -> Result<xcsc::fs_safety::PrivateDirectory, StorageError> {
+    xcsc::fs_safety::PrivateDirectory::create_for_administration(path).map_err(storage_error)
 }
 #[cfg(target_os = "windows")]
 pub use platform::prepare_root;
@@ -68,13 +68,13 @@ pub use platform::ProtectedState;
 
 #[cfg(any(target_os = "linux", target_os = "macos"))]
 pub struct ProtectedState {
-    directory: xcsc_fs_safety::PrivateDirectory,
-    _lock: Option<xcsc_fs_safety::AdvisoryLock>,
+    directory: xcsc::fs_safety::PrivateDirectory,
+    _lock: Option<xcsc::fs_safety::AdvisoryLock>,
 }
 #[cfg(any(target_os = "linux", target_os = "macos"))]
 impl ProtectedState {
     pub fn open(path: &Path) -> Result<Self, StorageError> {
-        use xcsc_fs_safety::{AdvisoryLock, EntryName, PrivateDirectory};
+        use xcsc::fs_safety::{AdvisoryLock, EntryName, PrivateDirectory};
         let parent_path = path.parent().ok_or(StorageError::Unsafe)?;
         let child_name = path.file_name().ok_or(StorageError::Unsafe)?;
         let parent =
@@ -101,7 +101,7 @@ impl ProtectedState {
     }
     /// Strictly read-only: does not create the directory, locks or records.
     pub fn open_readonly(path: &Path) -> Result<Self, StorageError> {
-        let directory = xcsc_fs_safety::PrivateDirectory::open_for_administration(path)
+        let directory = xcsc::fs_safety::PrivateDirectory::open_for_administration(path)
             .map_err(storage_error)?;
         Ok(Self {
             directory,
@@ -109,7 +109,7 @@ impl ProtectedState {
         })
     }
     pub fn read(&self, name: &str) -> Result<Option<Vec<u8>>, StorageError> {
-        use xcsc_fs_safety::{EntryName, InventoryLimits};
+        use xcsc::fs_safety::{EntryName, InventoryLimits};
         let name = EntryName::new(name).map_err(storage_error)?;
         let files = self
             .directory
@@ -130,7 +130,7 @@ impl ProtectedState {
         if self._lock.is_none() {
             return Err(StorageError::Unsafe);
         }
-        use xcsc_fs_safety::{AtomicFile, EntryName};
+        use xcsc::fs_safety::{AtomicFile, EntryName};
         if bytes.len() > 2 * 1024 * 1024 {
             return Err(StorageError::Unsafe);
         }
@@ -148,7 +148,7 @@ impl ProtectedState {
         if self._lock.is_none() {
             return Err(StorageError::Unsafe);
         }
-        use xcsc_fs_safety::{AtomicFile, EntryName};
+        use xcsc::fs_safety::{AtomicFile, EntryName};
         let source = EntryName::new(name).map_err(storage_error)?;
         let archive = EntryName::new(archive_name).map_err(storage_error)?;
         let bytes = self
@@ -159,7 +159,7 @@ impl ProtectedState {
         self.directory.remove_file(&source).map_err(storage_error)
     }
     pub fn import_bootstrap(&self, path: &Path) -> Result<(), StorageError> {
-        use xcsc_fs_safety::{EntryName, PrivateDirectory};
+        use xcsc::fs_safety::{EntryName, PrivateDirectory};
         let parent = PrivateDirectory::open_existing(path.parent().ok_or(StorageError::Unsafe)?)
             .map_err(storage_error)?;
         let name =
@@ -186,13 +186,13 @@ impl ProtectedState {
 /// An exclusive runtime lease also excludes all writers and competing runs.
 #[cfg(unix)]
 pub struct MaintenanceGuard {
-    _directory: xcsc_fs_safety::PrivateDirectory,
-    _lock: xcsc_fs_safety::AdvisoryLock,
+    _directory: xcsc::fs_safety::PrivateDirectory,
+    _lock: xcsc::fs_safety::AdvisoryLock,
 }
 #[cfg(unix)]
 impl MaintenanceGuard {
     pub fn acquire(path: &std::path::Path) -> Result<Self, StorageError> {
-        use xcsc_fs_safety::{AdvisoryLock, EntryName};
+        use xcsc::fs_safety::{AdvisoryLock, EntryName};
         let directory = prepare_root(path)?;
         let lock = AdvisoryLock::acquire(
             &directory,
@@ -223,7 +223,7 @@ impl MaintenanceGuard {
 
 #[cfg(unix)]
 pub fn read_input(path: &std::path::Path) -> Result<zeroize::Zeroizing<Vec<u8>>, StorageError> {
-    use xcsc_fs_safety::{ConfigurationDirectory, EntryName, InputVisibility};
+    use xcsc::fs_safety::{ConfigurationDirectory, EntryName, InputVisibility};
     let dir = ConfigurationDirectory::open(path.parent().ok_or(StorageError::Unsafe)?)
         .map_err(storage_error)?;
     dir.read_input_bounded(

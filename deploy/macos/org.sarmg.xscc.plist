@@ -3,8 +3,8 @@
 <plist version="1.0"><dict>
 <key>Label</key><string>org.sarmg.xscc</string>
 <key>ProgramArguments</key><array><string>/usr/local/libexec/xscc</string><string>run</string><string>--state</string><string>/Library/Application Support/xscc</string></array>
-<key>UserName</key><string>_sunshineclient</string>
-<key>GroupName</key><string>_sunshineclient</string>
+<key>UserName</key><string>_xscc</string>
+<key>GroupName</key><string>_xscc</string>
 <key>WorkingDirectory</key><string>/Library/Application Support/xscc</string>
 <key>RunAtLoad</key><true/>
 <key>KeepAlive</key><dict><key>SuccessfulExit</key><false/></dict>

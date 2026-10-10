@@ -18,7 +18,7 @@ for path in "$state" "$plist" "$binary" /usr/local/bin/xscc /var/log/xscc.log /e
     exec bash "$helper" "$1" "$source_dir"
   fi
 done
-if dscl . -read /Users/_sunshineclient >/dev/null 2>&1 || dscl . -read /Groups/_sunshineclient >/dev/null 2>&1; then
+if dscl . -read /Users/_xscc >/dev/null 2>&1 || dscl . -read /Groups/_xscc >/dev/null 2>&1; then
   echo 'Existing service account requires review; no account is modified.' >&2; exit 5
 fi
 # Refuse symlinked writable roots; do not repair ownership on existing directories.
@@ -51,8 +51,8 @@ rollback() {
     [ "$made_link" = 0 ] || rm -f /usr/local/bin/xscc
     [ "$made_binary" = 0 ] || rm -f "$binary"
     [ "$made_state" = 0 ] || rmdir "$state"
-    [ "$made_user" = 0 ] || dscl . -delete /Users/_sunshineclient
-    [ "$made_group" = 0 ] || dscl . -delete /Groups/_sunshineclient
+    [ "$made_user" = 0 ] || dscl . -delete /Users/_xscc
+    [ "$made_group" = 0 ] || dscl . -delete /Groups/_xscc
     echo 'Installation failed; newly created Client artifacts rolled back.' >&2
   fi
   exit "$result"
@@ -60,20 +60,20 @@ rollback() {
 trap rollback EXIT
 trap 'exit 130' INT
 trap 'exit 143' HUP TERM
-dscl . -create /Groups/_sunshineclient
+dscl . -create /Groups/_xscc
 made_group=1
-dscl . -create /Groups/_sunshineclient PrimaryGroupID "$uid"
-dscl . -create /Users/_sunshineclient
+dscl . -create /Groups/_xscc PrimaryGroupID "$uid"
+dscl . -create /Users/_xscc
 made_user=1
-dscl . -create /Users/_sunshineclient UniqueID "$uid"
-dscl . -create /Users/_sunshineclient PrimaryGroupID "$uid"
-dscl . -create /Users/_sunshineclient UserShell /usr/bin/false
-dscl . -create /Users/_sunshineclient NFSHomeDirectory /var/empty
-dscl . -create /Users/_sunshineclient IsHidden 1
+dscl . -create /Users/_xscc UniqueID "$uid"
+dscl . -create /Users/_xscc PrimaryGroupID "$uid"
+dscl . -create /Users/_xscc UserShell /usr/bin/false
+dscl . -create /Users/_xscc NFSHomeDirectory /var/empty
+dscl . -create /Users/_xscc IsHidden 1
 install -d -m 0755 /usr/local/bin /usr/local/libexec
 mkdir -m 0700 "$state"
 made_state=1
-chown _sunshineclient:_sunshineclient "$state"
+chown _xscc:_xscc "$state"
 made_binary=1
 install -m 0755 -o root -g wheel "$1" "$binary"
 ln -s "$binary" /usr/local/bin/xscc
@@ -81,10 +81,10 @@ made_link=1
 made_plist=1
 install -m 0644 -o root -g wheel "$source_dir/org.sarmg.xscc.plist" "$plist"
 made_log=1
-install -m 0600 -o _sunshineclient -g _sunshineclient /dev/null /var/log/xscc.log
+install -m 0600 -o _xscc -g _xscc /dev/null /var/log/xscc.log
 install -d -m 0755 /etc/newsyslog.d
 made_rotation=1
-printf '%s\n' '/var/log/xscc.log _sunshineclient:_sunshineclient 600 7 1024 * J' > /etc/newsyslog.d/xscc.conf
+printf '%s\n' '/var/log/xscc.log _xscc:_xscc 600 7 1024 * J' > /etc/newsyslog.d/xscc.conf
 launchctl disable system/org.sarmg.xscc
 committed=1
 echo 'Installed without pairing or service startup. Run xscc setup --interactive.'

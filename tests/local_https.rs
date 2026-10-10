@@ -317,7 +317,7 @@ async fn malformed_success_and_oversized_body_fail_closed() {
 
 #[tokio::test]
 #[ignore = "requires loopback sockets and openssl"]
-async fn protocol_v2_uses_fixed_sunshine_resources_and_reconciles_application_reordering() {
+async fn current_protocol_uses_fixed_sunshine_resources_and_reconciles_application_reordering() {
     let temporary = tempfile::tempdir().unwrap();
     certificates(temporary.path());
     let original = serde_json::json!({"name":"Steam","output":"","cmd":"","working-dir":"","exclude-global-prep-cmd":false,"elevated":false,"auto-detach":false,"wait-all":false,"exit-timeout":5,"prep-cmd":[],"detached":[],"image-path":""});

@@ -14,7 +14,7 @@ pub(super) struct Facts {
 }
 impl Facts {
     pub(super) fn open(path: &Path, writable: bool) -> Result<Self, StorageError> {
-        xcsc_runtime::block_on_worker_future(async {
+        xcsc::runtime::block_on_worker_future(async {
             let options = SqliteConnectOptions::new()
                 .filename(path)
                 .create_if_missing(false)
@@ -66,7 +66,7 @@ impl Facts {
     pub(super) fn read(&self, name: &str) -> Result<Option<Vec<u8>>, StorageError> {
         let mut connection = self.connection.lock().map_err(|_| StorageError::Unsafe)?;
         let connection = connection.as_mut().ok_or(StorageError::Unsafe)?;
-        xcsc_runtime::block_on_worker_future(async {
+        xcsc::runtime::block_on_worker_future(async {
             let length: Option<i64> =
                 sqlx::query_scalar("SELECT length(value) FROM facts WHERE name=?")
                     .bind(name)
@@ -85,7 +85,7 @@ impl Facts {
     }
     pub(super) fn names(&self) -> Result<Vec<String>, StorageError> {
         let mut connection = self.connection.lock().map_err(|_| StorageError::Unsafe)?;
-        let names: Vec<Option<String>> = xcsc_runtime::block_on_worker_future(
+        let names: Vec<Option<String>> = xcsc::runtime::block_on_worker_future(
             sqlx::query_scalar("SELECT CASE WHEN length(name) BETWEEN 1 AND 128 THEN name ELSE NULL END FROM facts ORDER BY name LIMIT 4098")
                 .fetch_all(connection.as_mut().ok_or(StorageError::Unsafe)?),
         )
@@ -101,7 +101,7 @@ impl Facts {
             return Err(StorageError::Unsafe);
         }
         let mut connection = self.connection.lock().map_err(|_| StorageError::Unsafe)?;
-        xcsc_runtime::block_on_worker_future(sqlx::query("INSERT INTO facts(name,value) VALUES(?,?) ON CONFLICT(name) DO UPDATE SET value=excluded.value")
+        xcsc::runtime::block_on_worker_future(sqlx::query("INSERT INTO facts(name,value) VALUES(?,?) ON CONFLICT(name) DO UPDATE SET value=excluded.value")
             .bind(name).bind(bytes).execute(connection.as_mut().ok_or(StorageError::Unsafe)?)).map_err(storage_error)?;
         Ok(())
     }
@@ -110,7 +110,7 @@ impl Facts {
             return Err(StorageError::Unsafe);
         }
         let mut connection = self.connection.lock().map_err(|_| StorageError::Unsafe)?;
-        xcsc_runtime::block_on_worker_future(async {
+        xcsc::runtime::block_on_worker_future(async {
             let mut transaction = connection
                 .as_mut()
                 .ok_or(StorageError::Unsafe)?
@@ -162,7 +162,7 @@ impl Drop for Facts {
             .unwrap_or_else(std::sync::PoisonError::into_inner)
             .take();
         if let Some(connection) = connection {
-            let _ = xcsc_runtime::block_on_worker_future(connection.close());
+            let _ = xcsc::runtime::block_on_worker_future(connection.close());
         }
     }
 }

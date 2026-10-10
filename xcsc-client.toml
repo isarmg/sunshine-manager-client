@@ -1,5 +1,5 @@
 format = 1
-product_id = "xscs"
+product_id = "xscc"
 source_roots = ["."]
 
 [foundation]

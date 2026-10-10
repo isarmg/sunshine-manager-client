@@ -8,7 +8,7 @@ use std::{
     path::{Path, PathBuf},
     time::Instant,
 };
-use xcsc_cli::*;
+use xcsc::cli::*;
 use zeroize::Zeroizing;
 
 const MAX_URL_BYTES: usize = 2_048;
@@ -1064,7 +1064,7 @@ pub fn entry(raw: Vec<String>) -> u8 {
         });
         #[cfg(not(windows))]
         if let Err(error) = args.validate_options(&["--tail", "--since", "--follow"]) {
-            return xcsc_cli::emit(
+            return xcsc::cli::emit(
                 "xscc",
                 "logs",
                 &args.format,
@@ -1575,20 +1575,22 @@ fn validate_settings(settings: &Settings) -> Result<()> {
 
 #[cfg(windows)]
 fn windows_runtime_logs(
-    args: &xcsc_cli::Args,
+    args: &xcsc::cli::Args,
     path: &std::path::Path,
-) -> xcsc_cli::Result<serde_json::Value> {
-    use xcsc_cli::{fail, storage_error};
-    use xcsc_fs_safety::{EntryName, Error, PrivateDirectory};
+) -> xcsc::cli::Result<serde_json::Value> {
+    use xcsc::cli::{fail, storage_error};
+    use xcsc::fs_safety::{EntryName, Error, PrivateDirectory};
     let directory = PrivateDirectory::open_existing(path.join("logs")).map_err(storage_error)?;
     let level = args
         .get("--level")
         .map(|value| {
-            serde_json::from_value::<xcss_log::Level>(serde_json::json!(value.to_ascii_uppercase()))
+            serde_json::from_value::<xcsc::log::Level>(serde_json::json!(
+                value.to_ascii_uppercase()
+            ))
         })
         .transpose()
         .map_err(|_| fail(2, "invalid_log_level"))?;
-    xcsc_cli::query_rotating_logs(
+    xcsc::cli::query_rotating_logs(
         args,
         "xscc",
         |name| match directory.read_private_bounded(
@@ -1600,9 +1602,9 @@ fn windows_runtime_logs(
             Err(_) => Err(fail(8, "unsafe_or_unreadable_runtime_log")),
         },
         |bytes| {
-            xcss_log::query(
+            xcsc::log::query(
                 std::io::Cursor::new(bytes),
-                xcss_log::LogFilter {
+                xcsc::log::LogFilter {
                     since: args.get("--since"),
                     instance_id: args.get("--instance-id"),
                     event: args.get("--event"),
@@ -1611,7 +1613,7 @@ fn windows_runtime_logs(
                     minimum_level: level,
                     ..Default::default()
                 },
-                xcss_log::QueryLimits {
+                xcsc::log::QueryLimits {
                     max_input_bytes: 1024 * 1024,
                     max_records: 16384,
                 },

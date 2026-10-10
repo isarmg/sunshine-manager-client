@@ -94,12 +94,12 @@ fn run() -> windows_service::Result<()> {
             .as_ref()
             .map_err(|_| ServiceFailure::ProtectedState)
             .and_then(|_| {
-                xcss_log::RotatingLogFile::create_private(
+                xcsc::log::RotatingLogFile::create_private(
                     state_path.join("logs"),
                     "xscc",
-                    xcss_log::LogRetention::default(),
+                    xcsc::log::LogRetention::default(),
                 )
-                .and_then(xcss_log::install_rotating_file)
+                .and_then(xcsc::log::install_rotating_file)
                 .map_err(|_| ServiceFailure::RuntimeFailure)
             });
         match prepared.and_then(|_| {
@@ -107,12 +107,12 @@ fn run() -> windows_service::Result<()> {
         }) {
             Ok(runtime) => runtime
                 .block_on(async {
-                    xcss_log::LogRecord::server(
+                    xcsc::log::LogRecord::client(
                         "xscc",
                         "windows-service",
                         "xscc.windows.started",
                         "Windows service runtime started.",
-                        xcss_log::Level::Info,
+                        xcsc::log::Level::Info,
                     )
                     .and_then(|record| record.emit())
                     .map_err(|_| {
@@ -159,7 +159,7 @@ fn run() -> windows_service::Result<()> {
     Ok(())
 }
 
-fn service_diagnostic(event: &str, failure: ServiceFailure) -> Result<(), xcss_log::LogError> {
+fn service_diagnostic(event: &str, failure: ServiceFailure) -> Result<(), xcsc::log::LogError> {
     let code = match failure {
         ServiceFailure::ProtectedState => "state_invalid",
         ServiceFailure::Configuration => "configuration_invalid",
@@ -170,12 +170,12 @@ fn service_diagnostic(event: &str, failure: ServiceFailure) -> Result<(), xcss_l
         ServiceFailure::ManagerUnavailable => "manager_unavailable",
         ServiceFailure::RuntimeFailure => "windows_runtime_failed",
     };
-    xcss_log::LogRecord::server(
+    xcsc::log::LogRecord::client(
         "xscc",
         "windows-service",
         event,
         "Windows service runtime failed.",
-        xcss_log::Level::Error,
+        xcsc::log::Level::Error,
     )?
     .with_error_code(code)?
     .with_attribute("service_exit_code", failure as u32)?

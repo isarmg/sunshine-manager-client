@@ -9,7 +9,7 @@ fn fixture() -> (tempfile::TempDir, std::path::PathBuf) {
 fn current_table_rows_and_durability_survive_connection_reopen() {
     let (_directory, path) = fixture();
     // Construct the preexisting current schema independently of Facts::open.
-    xcsc_runtime::block_on_worker_future(async {
+    xcsc::runtime::block_on_worker_future(async {
         let mut connection =
             SqliteConnection::connect_with(&SqliteConnectOptions::new().filename(&path))
                 .await
@@ -68,7 +68,7 @@ fn fact_budget_and_existing_only_open_are_enforced() {
     assert!(store.read("huge").unwrap().is_none());
     // Simulate a database writer outside the bounded facts API.
     let mut connection = store.connection.lock().unwrap();
-    xcsc_runtime::block_on_worker_future(
+    xcsc::runtime::block_on_worker_future(
         sqlx::query("INSERT INTO facts VALUES('huge', zeroblob(?))")
             .bind(MAX_FACT_BYTES as i64 + 1)
             .execute(connection.as_mut().unwrap()),
@@ -89,7 +89,7 @@ async fn synchronous_facts_api_operates_inside_existing_tokio_runtime() {
 #[test]
 fn unknown_schema_is_rejected_without_repair_or_mutable_pragmas() {
     let (_directory, path) = fixture();
-    xcsc_runtime::block_on_worker_future(async {
+    xcsc::runtime::block_on_worker_future(async {
         let mut connection =
             SqliteConnection::connect_with(&SqliteConnectOptions::new().filename(&path))
                 .await
@@ -109,7 +109,7 @@ fn names_reject_oversized_database_keys_without_decoding_them() {
     let (_directory, path) = fixture();
     let store = Facts::open(&path, true).unwrap();
     let mut connection = store.connection.lock().unwrap();
-    xcsc_runtime::block_on_worker_future(
+    xcsc::runtime::block_on_worker_future(
         sqlx::query("INSERT INTO facts VALUES(?,X'01')")
             .bind("x".repeat(256 * 1024))
             .execute(connection.as_mut().unwrap()),
