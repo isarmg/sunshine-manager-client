@@ -128,7 +128,7 @@ Get-Service -Name SunshineService
 & $client tasks list --format json
 ```
 
-失败先记录脱敏的 `error.step`、`error.code` 和 `error.detail`；`connection_unconfirmed` 表示设置可能已保存、连接尚未确认。服务尚未建立日志时，查看事件查看器的 System/Service Control 管理端事件及 `sc.exe query Xscc` 返回的退出信息。
+失败先记录脱敏的 `error.step`、`error.code` 和 `error.detail`；`connection_unconfirmed` 表示设置可能已保存、连接尚未确认。服务尚未建立日志时，查看事件查看器“Windows 日志 → 系统（System）”中的 Service Control Manager（SCM）事件及 `sc.exe query Xscc` 返回的退出信息。
 
 ### 6. 升级、修复与卸载
 
