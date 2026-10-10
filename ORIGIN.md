@@ -1,10 +1,10 @@
-# Source provenance
+# 源码来源
 
-This independent client repository was extracted from xscs commit
-`aab11f0a60ebc18e5bc10130322db700e21fc997`.
-The original history remains in `https://github.com/isarmg/xscs`.
-Only tracked client implementation, installation and package verification sources were copied.
-No Server runtime, management Web, database, build output or private credential was copied.
+本独立客户端仓库从 xscs 的以下提交提取：
+`aab11f0a60ebc18e5bc10130322db700e21fc997`。
+原始历史保存在 `https://github.com/isarmg/xscs`。
+提取内容仅包括已受 Git 跟踪的客户端实现、安装和软件包验证源码。
+不包含服务端运行时、管理网页、数据库、构建产物或私有凭据。
 
-The product protocol is owned once in the Server repository and consumed through a full Git revision.
-The two repositories do not depend on adjacent workspaces or provide old-name compatibility aliases.
+产品协议由服务端仓库唯一维护，客户端通过完整的 Git 提交修订消费该源码。
+这两个仓库不依赖相邻工作区，也不提供旧名称的兼容别名。

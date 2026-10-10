@@ -2,7 +2,7 @@
 
 首次部署或日常维护请先阅读[分平台全流程指南](platform-setup.md)：按本机平台完成安装、配对、重新配对、服务/后台任务查看与启停、诊断和卸载，命令旁均说明用途。本文详细说明配置字段和业务操作。
 
-本文适用于 `xscc` `1.0.0`。Client 必须先连接本机 Sunshine，再与 xscs 配对；以下命令不会安装 Sunshine。
+本文适用于 `xscc` `1.0.0`。客户端必须先连接本机 Sunshine，再与 xscs 配对；以下命令不会安装 Sunshine。
 
 ## 命令用途与执行边界
 
@@ -17,10 +17,10 @@
 | `config apply --file PATH --expected-revision REVISION` | 检查当前修订并提交候选，避免并发覆盖；先停服 |
 | `setup` | 完整配对/复用、服务策略、启动和连接验证，适合首次部署 |
 | `pair` / `pair status` / `pair resume` | 分别执行单独配对、查看事务、恢复已开始事务 |
-| `pair replace` | 用新 Manager 授权替换绑定，保留本机安装身份和执行记录 |
-| `credentials update` | 更新本机 Sunshine 用户名/密码，保留 Manager 绑定；先停服 |
-| `status --check` | 查看 Client 业务与连接检查，不能代替只读任务往返验收 |
-| `doctor --network` | 检查远程 Manager 入口，不能证明 Sunshine 本机认证可用 |
+| `pair replace` | 用新管理端授权替换绑定，保留本机安装身份和执行记录 |
+| `credentials update` | 更新本机 Sunshine 用户名/密码，保留管理端绑定；先停服 |
+| `status --check` | 查看客户端业务与连接检查，不能代替只读任务往返验收 |
+| `doctor --network` | 检查远程管理端入口，不能证明 Sunshine 本机认证可用 |
 | `doctor --sunshine` | 真实访问本机 Sunshine API，检查版本与凭据 |
 | `tasks list` / `tasks show OPERATION_ID` | 查看任务列表/单项持久执行记录，不重新执行任务 |
 | `logs --tail 100` | 读取最近日志，不改变服务运行状态 |
@@ -95,11 +95,11 @@ sudo xscc config apply \
   --format json
 ```
 
-候选文件只允许 `sunshine_endpoint`。提交前重新读取 revision；发生冲突时重新生成候选文件，不要覆盖其他管理员的修改。
+候选文件只允许 `sunshine_endpoint`。提交前重新读取提交修订；发生冲突时重新生成候选文件，不要覆盖其他管理员的修改。
 
-## 3. 与 Manager 配对
+## 3. 与管理端配对
 
-在 Manager 管理页创建实例并复制授权码。准备严格 JSON：
+在管理端管理页创建实例并复制授权码。准备严格 JSON：
 
 ```json
 {
@@ -127,7 +127,7 @@ sudo shred -u /root/sunshine-bootstrap.json
 sudo xscc setup --interactive
 ```
 
-首次配对和 `pair replace --interactive` 的 Manager 实例授权码都使用 `Authorization code (visible)` 普通
+首次配对和 `pair replace --interactive` 的管理端实例授权码都使用 `Authorization code (visible)` 普通
 文本提示，输入或粘贴内容会在终端中明文回显，不提供遮罩、隐藏切换或特殊显示流程。本机 Sunshine 密码
 仍使用隐藏输入。CLI 不会把两者写入日志、结果 JSON 或命令参数。
 
@@ -168,11 +168,11 @@ sudo sh -c 'exec xscc credentials update --input-stdin --non-interactive --forma
 sudo shred -u /root/sunshine-credentials.json
 ```
 
-此操作保留 Manager 绑定、installation ID 和任务记录。
+此操作保留管理端绑定、installation ID 和任务记录。
 
-## 5. 更换 Manager 授权码
+## 5. 更换管理端授权码
 
-Manager 管理员轮换实例授权码后，旧 Client 凭据立即失效。停止服务，创建与首次配对相同格式的新 Bootstrap JSON，再执行：
+管理端管理员轮换实例授权码后，旧客户端凭据立即失效。停止服务，创建与首次配对相同格式的新引导配置 JSON，再执行：
 
 ```sh
 sudo xscc service stop
@@ -181,9 +181,9 @@ sudo xscc pair status --format json
 sudo xscc service start
 ```
 
-`pair replace` 保留本机安装身份和执行记录。切换到另一台 Manager 前，应先在旧 Manager 退役设备并按运维策略归档状态。
+`pair replace` 保留本机安装身份和执行记录。切换到另一台管理端前，应先在旧管理端退役设备并按运维策略归档状态。
 
-若旧版本账户文档返回 `pairing_state_incompatible`，使用同一条 `pair replace` 命令。Client 会在确认执行日志完整后归档旧账户文档并创建当前身份；如果执行日志不兼容或不可读，则返回 `important_state_incompatible`，不会删除、改写或绕过这些重要记录。
+若旧版本账户文档返回 `pairing_state_incompatible`，使用同一条 `pair replace` 命令。客户端会在确认执行日志完整后归档旧账户文档并创建当前身份；如果执行日志不兼容或不可读，则返回 `important_state_incompatible`，不会删除、改写或绕过这些重要记录。
 
 ## 6. 启动和验证
 
@@ -199,9 +199,9 @@ xscc doctor --sunshine --format json
 xscc tasks list --format json
 ```
 
-`doctor --network` 检查 Manager 网络入口；`doctor --sunshine` 会真实访问本机 Sunshine API 并验证版本和凭据。最后在 Manager 管理页确认设备在线，再执行一个只读任务验证完整链路。
+`doctor --network` 检查管理端网络入口；`doctor --sunshine` 会真实访问本机 Sunshine API 并验证版本和凭据。最后在管理端管理页确认设备在线，再执行一个只读任务验证完整链路。
 
-两个网络探测均遵守 `--timeout`（如 `--timeout 5s`）；Manager 探测超时返回 `network_probe_timeout`，本机 Sunshine 探测超时返回 `sunshine_probe_timeout`。已到达本机 Sunshine API 的探测在成功、凭据拒绝和版本不受支持时均标明 TLS 已加密、证书身份未按回环策略检查。
+两个网络探测均遵守 `--timeout`（如 `--timeout 5s`）；管理端探测超时返回 `network_probe_timeout`，本机 Sunshine 探测超时返回 `sunshine_probe_timeout`。已到达本机 Sunshine API 的探测在成功、凭据拒绝和版本不受支持时均标明 TLS 已加密、证书身份未按回环策略检查。
 
 查看某项本地执行记录：
 
@@ -212,11 +212,11 @@ xscc logs --tail 100
 
 ## 7. 安全注意事项
 
-- Manager 连接始终校验系统信任链和域名；先修复证书，不要关闭校验。
-- 本机 Sunshine 连接被限制为 HTTPS loopback；Client 不校验其自签名证书身份，但每次请求仍校验用户名和密码。
+- 管理端连接始终校验系统信任链和域名；先修复证书，不要关闭校验。
+- 本机 Sunshine 连接被限制为 HTTPS 回环连接；客户端不校验其自签名证书身份，但每次请求仍校验用户名和密码。
 - 授权码通过受保护终端的明文回显提示或 stdin 输入；Sunshine 密码通过隐藏提示或 stdin 输入。两者都不放入参数、环境变量、日志和版本库。
 - 配置、配对和凭据写入前停止服务；成功验证后再启动。
 
 ## 运行日志
 
-Manager 连接、断开、授权拒绝和协议失败使用 xcsc 内部 `xcsc::log` 实现输出 UTC JSON 行到 stderr，事件为 `xscc.session.*`。每条带设备 UUID 的 `instance_id` 和稳定失败 `error_code`；不输出凭据、Manager endpoint 或任意内部错误链。诊断写入失败返回 `diagnostics_unavailable` 并停止运行，由平台服务宿主报告。
+管理端连接、断开、授权拒绝和协议失败使用 xcsc 内部 `xcsc::log` 实现输出 UTC JSON 行到 stderr，事件为 `xscc.session.*`。每条带设备 UUID 的 `instance_id` 和稳定失败 `error_code`；不输出凭据、管理端 endpoint 或任意内部错误链。诊断写入失败返回 `diagnostics_unavailable` 并停止运行，由平台服务宿主报告。

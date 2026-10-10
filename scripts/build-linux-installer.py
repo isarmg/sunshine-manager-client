@@ -35,9 +35,9 @@ Maintainer: sarmg <maintainers@sarmg.org>
 Depends: libc6 (>= 2.39), libgcc-s1, libssl3t64, ca-certificates, systemd, passwd
 Section: admin
 Priority: optional
-Description: xscc Sunshine management client
- Run sudo xscc setup after installation.
- No video forwarding, inbound listener or changes to Sunshine.
+Description: xscc 的 Sunshine 本机管理客户端
+ 安装完成后运行 sudo xscc setup。
+ 不转发视频、不开放入站监听，也不修改 Sunshine 软件本体。
 ''')
         scripts = {
             'preinst': '''#!/bin/sh

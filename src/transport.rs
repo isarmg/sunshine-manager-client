@@ -418,7 +418,7 @@ fn classify_handshake(error: tungstenite::Error) -> TransportError {
             if response.status() == StatusCode::UNAUTHORIZED
                 && response
                     .headers()
-                    .get("x-xcss-error-code")
+                    .get("x-error-code")
                     .is_some_and(|value| value.as_bytes() == b"unauthorized") =>
         {
             TransportError::Revoked
@@ -458,7 +458,7 @@ mod tests {
         ] {
             let mut builder = tungstenite::http::Response::builder().status(status);
             if let Some(marker) = marker {
-                builder = builder.header("x-xcss-error-code", marker);
+                builder = builder.header("x-error-code", marker);
             }
             let response = builder.body(None).unwrap();
             assert_eq!(

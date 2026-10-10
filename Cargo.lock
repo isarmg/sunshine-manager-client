@@ -2400,7 +2400,7 @@ checksum = "3ad82d2a33cdc9674dc7465672f271e096168fcdbe0f799d9e6db8c5892679dc"
 [[package]]
 name = "xcsc"
 version = "1.0.0"
-source = "git+https://github.com/isarmg/xcsc.git?rev=00770c007912b276f5bb1075abfefe3c31026276#00770c007912b276f5bb1075abfefe3c31026276"
+source = "git+https://github.com/isarmg/xcsc.git?rev=c45e48e93e360542c2e1db6c6441a9e29b344b03#c45e48e93e360542c2e1db6c6441a9e29b344b03"
 dependencies = [
  "aes-gcm",
  "async-trait",
@@ -2455,7 +2455,7 @@ dependencies = [
 [[package]]
 name = "xscs-protocol"
 version = "1.0.0"
-source = "git+https://github.com/isarmg/xscs.git?rev=41330c0e17d81f951dd7b81d6fdb64be79cff2b8#41330c0e17d81f951dd7b81d6fdb64be79cff2b8"
+source = "git+https://github.com/isarmg/xscs.git?rev=abe8df18d5f69a17f5d3b7f5a2b3c396b60ece9a#abe8df18d5f69a17f5d3b7f5a2b3c396b60ece9a"
 dependencies = [
  "hex",
  "serde",
